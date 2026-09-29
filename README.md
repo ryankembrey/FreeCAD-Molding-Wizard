@@ -1,5 +1,7 @@
 # Molding workbench for FreeCAD
 
+Note this readme was written by AI (except for this sentence), because I havent got round to writing a proper one myself yet
+
 Builds a printable mould around an existing part. Aimed at hobby and workshop
 silicone casting: you model a flexible part, and this makes the thing you print
 to cast it in.
