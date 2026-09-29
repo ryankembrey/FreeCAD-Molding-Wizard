@@ -245,12 +245,16 @@ def build(job):
                 })
 
     if getattr(job, "Bolts", False):
+        requested = int(getattr(job, "BoltCount", 4))
+        candidates = fasteners.bolt_points(
+            block_box, float(job.BoltInset), style_is_cylinder,
+            parting_height, requested,
+        )
+        bolt_spec = fasteners.BOLTS.get(job.BoltSize, {})
+        bolt_hole_r = (bolt_spec.get("clearance", 4.5) + float(job.BoltClearance)) / 2.0
         points = [
-            p
-            for p in fasteners.bolt_points(
-                block_box, float(job.BoltInset), style_is_cylinder, parting_height
-            )
-            if not _too_close(wires, p, 2.0)
+            p for p in candidates
+            if not _bolt_hits_part(part, p, bolt_hole_r, block_box)
         ]
         _guard(
             result,
@@ -265,6 +269,20 @@ def build(job):
             bool(job.Counterbore),
             bool(job.NutTrap),
         )
+        placed = len(points)
+        if placed < requested:
+            result.warnings.append(
+                "Only %d of %d bolt(s) placed; the rest were too close to "
+                "the cavity. Increase the wall thickness or reduce the bolt "
+                "count." % (placed, requested)
+            )
+        result.notes.append("Bolts placed: %d" % placed)
+        for bp in points:
+            result.feature_points.append({
+                "name": "Bolt",
+                "type": "bolt",
+                "point": App.Vector(bp.x, bp.y, parting_height),
+            })
 
     if job.PrySlots:
         _guard(
@@ -323,6 +341,21 @@ def _measure(result, part, parting_height, overpour):
                 "Minimum draft on the %s half is %.1f degrees, so expect it to "
                 "grip." % (name, draft)
             )
+
+
+def _bolt_hits_part(part_shape, point, hole_radius, block_box):
+    """True when a vertical bolt hole at *point* would break into the part."""
+    if not part_shape.Solids:
+        return False
+    try:
+        import Part
+
+        margin = hole_radius + 0.5  # half-mm structural wall minimum
+        vertex = Part.Vertex(App.Vector(point.x, point.y, point.z))
+        dist = vertex.distToShape(part_shape)[0]
+        return dist < margin
+    except Exception:
+        return False
 
 
 def _too_close(wires, point, margin):

@@ -78,6 +78,19 @@ class MoldJob(object):
     __getstate__ = dumps
     __setstate__ = loads
 
+    # Properties that do NOT require a geometry rebuild.
+    _SKIP_REBUILD = frozenset({
+        "AutoUpdate", "Exploded",
+        "OutputDirectory", "ExportFormat", "MeshDeviation", "OrientForPrint",
+        "CavityVolume", "SuggestedPour", "Warnings", "Notes",
+        "Visibility", "Label", "Label2", "ExpressionEngine",
+    })
+
+    def onChanged(self, obj, prop):
+        """Filter property changes so view/export/results edits skip rebuild."""
+        if prop in self._SKIP_REBUILD:
+            obj.purgeTouched()
+
     def execute(self, obj):
         if getattr(self, "building", False):
             return
@@ -308,11 +321,12 @@ def add_properties(obj):
 
     # -- Hardware (bolts, kept but off by default) --
     prop("App::PropertyBool", "Bolts", "Hardware", "Add clamping bolt holes", False)
+    prop("App::PropertyInteger", "BoltCount", "Hardware", "Number of bolts around the perimeter", 4)
     prop("App::PropertyEnumeration", "BoltSize", "Hardware", "Bolt thread size", "M4", BOLT_SIZES)
     prop("App::PropertyDistance", "BoltInset", "Hardware", "Inset from block edge", DEFAULTS["BoltInset"])
     prop("App::PropertyDistance", "BoltClearance", "Hardware", "Extra diameter for print fit", 0.3)
     prop("App::PropertyBool", "Counterbore", "Hardware", "Sink the bolt head", True)
-    prop("App::PropertyBool", "NutTrap", "Hardware", "Hex pocket for captive nut", True)
+    prop("App::PropertyBool", "NutTrap", "Hardware", "Nut pocket for captive nut", True)
 
     # -- Build --
     prop("App::PropertyBool", "AutoUpdate", "Build", "Rebuild whenever a parameter changes", True)

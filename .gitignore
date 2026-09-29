@@ -1,0 +1,11 @@
+pyrightconfig.json
+*.step
+*__pycache__
+*.FCBak
+*.FCStd
+*.step
+*.STEP
+*.stp
+docs/build/
+docs/build/
+

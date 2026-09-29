@@ -25,8 +25,11 @@ from ..core import analysis
 from ..core.frame import local_frame, to_local
 from ..core.models import (
     BLOCK_STYLES,
+    BOLT_SIZES,
     DEFAULTS,
     GUTTER_SIDES,
+    LAYOUTS,
+    LAYOUT_TWO,
     SYRINGE_SIZE_LIST,
     VENT_SHAPES,
 )
@@ -84,11 +87,13 @@ class _SpinBoxEnterFilter(QtCore.QObject):
 _WIZARD_STEPS = [
     ("object",    "Select Object"),
     ("pull",      "Pull Direction"),
+    ("parting",   "Parting"),
     ("block",     "Mold Block"),
-    ("injection", "Injection Port"),
+    ("filling",   "Filling Method"),
     ("overflow",  "Overflow Gutter"),
     ("vents",     "Vents"),
     ("keys",      "Registration Keys"),
+    ("hardware",  "Hardware"),
     ("pry",       "Pry Slots"),
 ]
 
@@ -250,11 +255,13 @@ class MoldWizardPanel(object):
         # Build each feature group
         self._build_object_group(root)
         self._build_pull_group(root)
+        self._build_parting_group(root)
         self._build_block_group(root)
-        self._build_injection_group(root)
+        self._build_filling_group(root)
         self._build_overflow_group(root)
         self._build_vents_group(root)
         self._build_keys_group(root)
+        self._build_hardware_group(root)
         self._build_pry_group(root)
         root.addStretch(1)
 
@@ -422,6 +429,55 @@ class MoldWizardPanel(object):
         root.addWidget(box)
         self._step_widgets.append(box)
 
+    # --- Parting ---
+
+    def _build_parting_group(self, root):
+        box = QtWidgets.QGroupBox("Parting")
+        box.setToolTip(
+            "How the mold splits apart. Two piece is the standard "
+            "top/bottom split. Three piece adds a second vertical cut "
+            "through one half for parts with deep undercuts."
+        )
+        g = self._grid(box)
+
+        lbl_layout = QtWidgets.QLabel("Layout")
+        lbl_layout.setToolTip("Number of mold pieces.")
+        g.addWidget(lbl_layout, 0, 0)
+        self.cb_layout = QtWidgets.QComboBox()
+        self.cb_layout.addItems(LAYOUTS)
+        self.cb_layout.setCurrentText(LAYOUT_TWO)
+        self._compact_combo(self.cb_layout)
+        self.cb_layout.setToolTip(
+            "Two piece: simple top/bottom.\n"
+            "Three piece: one half is split again by a vertical plane, "
+            "useful when the part cannot be pulled straight out."
+        )
+        self.cb_layout.currentTextChanged.connect(self._on_layout_changed)
+        g.addWidget(self.cb_layout, 0, 1)
+
+        lbl_angle = QtWidgets.QLabel("Secondary angle")
+        lbl_angle.setToolTip(
+            "Rotation of the second splitting plane around the pull axis. "
+            "Only used for three piece layouts."
+        )
+        g.addWidget(lbl_angle, 1, 0)
+        self.sb_secondary_angle = self._spin(
+            value=0.0, minimum=0.0, maximum=360.0, step=5.0,
+            decimals=1, suffix="°"
+        )
+        self.sb_secondary_angle.setToolTip(
+            "Angle in degrees. 0 splits along X, 90 along Y, etc."
+        )
+        self.sb_secondary_angle.setEnabled(False)
+        g.addWidget(self.sb_secondary_angle, 1, 1)
+
+        root.addWidget(box)
+        self._step_widgets.append(box)
+
+    def _on_layout_changed(self, text):
+        three_piece = text != LAYOUT_TWO
+        self.sb_secondary_angle.setEnabled(three_piece)
+
     # --- Block ---
 
     def _build_block_group(self, root):
@@ -469,46 +525,80 @@ class MoldWizardPanel(object):
 
     # --- Injection ---
 
-    def _build_injection_group(self, root):
-        box = QtWidgets.QGroupBox("Injection Port")
-        box.setCheckable(True)
-        box.setChecked(True)
+    def _build_filling_group(self, root):
+        box = QtWidgets.QGroupBox("Filling Method")
         box.setToolTip(
-            "Adds a syringe injection port with a Luer lock adapter recess. "
-            "Uncheck to omit the port entirely."
+            "How silicone enters the mold. Syringe injection uses a "
+            "Luer lock port; pour port is an open funnel at the top; "
+            "or choose None for a plain sealed mold."
         )
-        self.grp_injection = box
         g = self._grid(box)
 
-        lbl = QtWidgets.QLabel("Syringe size")
-        lbl.setToolTip("Barrel volume determines the Luer lock taper dimensions (ISO 80369-7).")
-        g.addWidget(lbl, 0, 0)
+        # Method selector
+        lbl_method = QtWidgets.QLabel("Method")
+        lbl_method.setToolTip("Choose how to fill the mold cavity.")
+        g.addWidget(lbl_method, 0, 0)
+        self.cb_fill_method = QtWidgets.QComboBox()
+        self.cb_fill_method.addItems(["Syringe injection", "Pour port", "None"])
+        self.cb_fill_method.setCurrentText("Syringe injection")
+        self._compact_combo(self.cb_fill_method)
+        self.cb_fill_method.setToolTip(
+            "Syringe injection: Luer lock adapter recess in the block wall.\n"
+            "Pour port: open funnel from the top of the block.\n"
+            "None: no filling port (e.g. for open-face molds)."
+        )
+        self.cb_fill_method.currentTextChanged.connect(self._on_fill_method_changed)
+        g.addWidget(self.cb_fill_method, 0, 1)
+
+        # Overpour %
+        self.sb_overpour = self._spin(
+            value=DEFAULTS["OverpourPercent"],
+            minimum=0.0, maximum=100.0, step=1.0,
+            decimals=0, suffix=" %"
+        )
+        self.sb_overpour.setToolTip(
+            "Extra silicone beyond the cavity volume to account for "
+            "waste, sprue, and shrinkage."
+        )
+        g.addWidget(QtWidgets.QLabel("Overpour"), 1, 0)
+        g.addWidget(self.sb_overpour, 1, 1)
+
+        # -- Syringe sub-widgets --
+        self.injection_widgets = []
+
+        lbl_syr = QtWidgets.QLabel("Syringe size")
+        lbl_syr.setToolTip("Barrel volume sets the Luer lock taper dimensions (ISO 80369-7).")
+        g.addWidget(lbl_syr, 2, 0)
         self.cb_syringe = QtWidgets.QComboBox()
         self.cb_syringe.addItems(SYRINGE_SIZE_LIST)
         self.cb_syringe.setCurrentText("10 mL")
         self._compact_combo(self.cb_syringe)
         self.cb_syringe.setToolTip(
-            "Barrel size of the syringe you will use. This sets the Luer lock "
-            "taper and collar dimensions. Syringes up to 20 mL share the same "
-            "tip; 30 mL and above are slightly larger."
+            "Barrel size of the syringe you will use. Syringes up to 20 mL "
+            "share the same tip; 30 mL and above are slightly larger."
         )
-        g.addWidget(self.cb_syringe, 0, 1)
+        g.addWidget(self.cb_syringe, 2, 1)
+        self.injection_widgets.extend([lbl_syr, self.cb_syringe])
 
         self.sb_inj_dia = self._spin(value=DEFAULTS["InjectionDiameter"], step=0.5)
         self.sb_inj_dia.setToolTip(
             "Bore diameter of the injection channel from the cavity to the "
             "adapter seat. 3 mm is typical for low viscosity silicone."
         )
-        g.addWidget(QtWidgets.QLabel("Channel diameter"), 1, 0)
-        g.addWidget(self.sb_inj_dia, 1, 1)
+        lbl_cd = QtWidgets.QLabel("Channel diameter")
+        g.addWidget(lbl_cd, 3, 0)
+        g.addWidget(self.sb_inj_dia, 3, 1)
+        self.injection_widgets.extend([lbl_cd, self.sb_inj_dia])
 
         self.sb_inj_len = self._spin(value=DEFAULTS["InjectionChannelLength"], step=1.0)
         self.sb_inj_len.setToolTip(
             "Length of the channel between the cavity opening and the adapter "
             "recess. Longer channels let you trim the sprue more cleanly."
         )
-        g.addWidget(QtWidgets.QLabel("Channel length"), 2, 0)
-        g.addWidget(self.sb_inj_len, 2, 1)
+        lbl_cl = QtWidgets.QLabel("Channel length")
+        g.addWidget(lbl_cl, 4, 0)
+        g.addWidget(self.sb_inj_len, 4, 1)
+        self.injection_widgets.extend([lbl_cl, self.sb_inj_len])
 
         # Custom placement button
         self.pb_inj_place = QtWidgets.QPushButton("Pick Location")
@@ -524,11 +614,51 @@ class MoldWizardPanel(object):
         self.le_inj_pos.setReadOnly(True)
         self.le_inj_pos.setMinimumHeight(28)
         self.le_inj_pos.setPlaceholderText("Auto (centre)")
-        g.addWidget(self.pb_inj_place, 3, 0)
-        g.addWidget(self.le_inj_pos, 3, 1)
+        g.addWidget(self.pb_inj_place, 5, 0)
+        g.addWidget(self.le_inj_pos, 5, 1)
+        self.injection_widgets.extend([self.pb_inj_place, self.le_inj_pos])
+
+        # -- Pour sub-widgets --
+        self.pour_widgets = []
+
+        self.sb_pour_dia = self._spin(value=8.0, step=0.5)
+        self.sb_pour_dia.setToolTip("Bore diameter of the pour hole.")
+        lbl_pd = QtWidgets.QLabel("Pour diameter")
+        g.addWidget(lbl_pd, 6, 0)
+        g.addWidget(self.sb_pour_dia, 6, 1)
+        self.pour_widgets.extend([lbl_pd, self.sb_pour_dia])
+
+        self.sb_funnel_dia = self._spin(value=18.0, step=1.0)
+        self.sb_funnel_dia.setToolTip("Mouth diameter of the funnel cone at the top of the block.")
+        lbl_fd = QtWidgets.QLabel("Funnel diameter")
+        g.addWidget(lbl_fd, 7, 0)
+        g.addWidget(self.sb_funnel_dia, 7, 1)
+        self.pour_widgets.extend([lbl_fd, self.sb_funnel_dia])
+
+        self.sb_funnel_depth = self._spin(value=6.0, step=0.5)
+        self.sb_funnel_depth.setToolTip("Depth of the funnel cone from the block top surface.")
+        lbl_fdp = QtWidgets.QLabel("Funnel depth")
+        g.addWidget(lbl_fdp, 8, 0)
+        g.addWidget(self.sb_funnel_depth, 8, 1)
+        self.pour_widgets.extend([lbl_fdp, self.sb_funnel_depth])
+
+        # Hide pour widgets by default (syringe is selected)
+        for w in self.pour_widgets:
+            w.hide()
 
         root.addWidget(box)
         self._step_widgets.append(box)
+
+        # Keep a reference to the group box for _apply_to_job compatibility
+        self.grp_injection = box
+
+    def _on_fill_method_changed(self, text):
+        is_syringe = text == "Syringe injection"
+        is_pour = text == "Pour port"
+        for w in self.injection_widgets:
+            w.setVisible(is_syringe)
+        for w in self.pour_widgets:
+            w.setVisible(is_pour)
 
     # --- Overflow gutter ---
 
@@ -739,6 +869,85 @@ class MoldWizardPanel(object):
         g.addWidget(self.sb_key_clearance, 2, 1)
         g.addWidget(QtWidgets.QLabel("Inset"), 3, 0)
         g.addWidget(self.sb_key_inset, 3, 1)
+        root.addWidget(box)
+        self._step_widgets.append(box)
+
+    # --- Hardware (bolts) ---
+
+    def _build_hardware_group(self, root):
+        box = QtWidgets.QGroupBox("Hardware")
+        box.setCheckable(True)
+        box.setChecked(False)
+        box.setToolTip(
+            "Through-bolt holes for clamping the mold halves together "
+            "with socket head cap screws. Uncheck for no bolts."
+        )
+        self.grp_hardware = box
+        g = self._grid(box)
+
+        # Bolt count
+        self.sb_bolt_count = self._int_spin(value=4, minimum=1, maximum=12)
+        self.sb_bolt_count.setToolTip(
+            "Number of bolts spaced evenly around the block perimeter. "
+            "Any that land too close to the cavity are skipped and a "
+            "warning tells you how many were actually placed."
+        )
+        g.addWidget(QtWidgets.QLabel("Count"), 0, 0)
+        g.addWidget(self.sb_bolt_count, 0, 1)
+
+        # Bolt size
+        self.cb_bolt_size = QtWidgets.QComboBox()
+        self.cb_bolt_size.addItems(BOLT_SIZES)
+        self.cb_bolt_size.setCurrentText("M4")
+        self._compact_combo(self.cb_bolt_size)
+        self.cb_bolt_size.setToolTip(
+            "Metric bolt thread size. M4 is a good default for small "
+            "to medium molds; go up for larger blocks."
+        )
+        g.addWidget(QtWidgets.QLabel("Bolt Size"), 1, 0)
+        g.addWidget(self.cb_bolt_size, 1, 1)
+
+        # Bolt inset
+        self.sb_bolt_inset = self._spin(value=DEFAULTS["BoltInset"])
+        self.sb_bolt_inset.setToolTip(
+            "Distance from the block edge to the bolt hole centre. "
+            "Keep bolts clear of the cavity."
+        )
+        g.addWidget(QtWidgets.QLabel("Inset"), 2, 0)
+        g.addWidget(self.sb_bolt_inset, 2, 1)
+
+        # Bolt clearance
+        self.sb_bolt_clearance = self._spin(
+            value=0.3, minimum=0.0, maximum=2.0, step=0.05, decimals=2
+        )
+        self.sb_bolt_clearance.setToolTip(
+            "Extra diameter added to the through-hole for print tolerance. "
+            "0.3 mm is typical for FDM."
+        )
+        g.addWidget(QtWidgets.QLabel("Clearance"), 3, 0)
+        g.addWidget(self.sb_bolt_clearance, 3, 1)
+
+        # Counterbore + Nut trap checkboxes side by side
+        hw_row = QtWidgets.QHBoxLayout()
+        hw_row.setContentsMargins(0, 0, 0, 0)
+        hw_row.setSpacing(12)
+        self.chk_counterbore = QtWidgets.QCheckBox("Counterbore")
+        self.chk_counterbore.setChecked(True)
+        self.chk_counterbore.setToolTip(
+            "Pocket at the top of the block so the bolt head sits flush."
+        )
+        self.chk_nut_trap = QtWidgets.QCheckBox("Nut Trap")
+        self.chk_nut_trap.setChecked(True)
+        self.chk_nut_trap.setToolTip(
+            "Cylindrical pocket at the bottom so a socket or spanner "
+            "can reach the captive nut."
+        )
+        hw_row.addWidget(self.chk_counterbore, 1)
+        hw_row.addWidget(self.chk_nut_trap, 1)
+        hw_wrap = QtWidgets.QWidget()
+        hw_wrap.setLayout(hw_row)
+        g.addWidget(hw_wrap, 3, 0, 1, 2)
+
         root.addWidget(box)
         self._step_widgets.append(box)
 
@@ -1235,7 +1444,11 @@ class MoldWizardPanel(object):
             job.Source = self.target_object
         job.PullDirection = self.pull_dir
         job.Shrink = self.sb_shrink.value()
+
+        # Parting
+        job.Layout = self.cb_layout.currentText()
         job.PartingOffset = self.sb_parting.value()
+        job.SecondaryAngle = self.sb_secondary_angle.value()
 
         # Block
         job.BlockStyle = self.cb_block_style.currentText()
@@ -1244,8 +1457,13 @@ class MoldWizardPanel(object):
         job.RoofThickness = self.sb_roof.value()
         job.BlockFillet = self.sb_fillet.value()
 
-        # Injection
-        job.InjectionPort = self.grp_injection.isChecked()
+        # Filling method
+        method = self.cb_fill_method.currentText()
+        job.InjectionPort = method == "Syringe injection"
+        job.PourPort = method == "Pour port"
+        job.OverpourPercent = self.sb_overpour.value()
+
+        # Injection specifics
         job.SyringeSize = self.cb_syringe.currentText()
         job.InjectionDiameter = self.sb_inj_dia.value()
         job.InjectionChannelLength = self.sb_inj_len.value()
@@ -1254,6 +1472,11 @@ class MoldWizardPanel(object):
             job.UseCustomInjectionPos = True
         else:
             job.UseCustomInjectionPos = False
+
+        # Pour port specifics
+        job.PourDiameter = self.sb_pour_dia.value()
+        job.FunnelDiameter = self.sb_funnel_dia.value()
+        job.FunnelDepth = self.sb_funnel_depth.value()
 
         # Overflow gutter
         job.Gutter = self.grp_gutter.isChecked()
@@ -1283,6 +1506,15 @@ class MoldWizardPanel(object):
         job.KeyClearance = self.sb_key_clearance.value()
         job.KeyInset = self.sb_key_inset.value()
 
+        # Hardware (bolts)
+        job.Bolts = self.grp_hardware.isChecked()
+        job.BoltCount = self.sb_bolt_count.value()
+        job.BoltSize = self.cb_bolt_size.currentText()
+        job.BoltInset = self.sb_bolt_inset.value()
+        job.BoltClearance = self.sb_bolt_clearance.value()
+        job.Counterbore = self.chk_counterbore.isChecked()
+        job.NutTrap = self.chk_nut_trap.isChecked()
+
         # Pry slots
         job.PrySlots = self.grp_pry.isChecked()
         job.PrySlotWidth = self.sb_pry_w.value()
@@ -1308,7 +1540,14 @@ class MoldWizardPanel(object):
         self.le_pull.setText(self.pull_ref)
 
         self.sb_shrink.setValue(float(job.Shrink))
+
+        # Parting
+        if hasattr(job, "Layout"):
+            self.cb_layout.setCurrentText(job.Layout)
+            self._on_layout_changed(job.Layout)
         self.sb_parting.setValue(float(job.PartingOffset))
+        if hasattr(job, "SecondaryAngle"):
+            self.sb_secondary_angle.setValue(float(job.SecondaryAngle))
 
         self.cb_block_style.setCurrentText(job.BlockStyle)
         self.sb_wall.setValue(float(job.WallThickness))
@@ -1316,7 +1555,23 @@ class MoldWizardPanel(object):
         self.sb_roof.setValue(float(job.RoofThickness))
         self.sb_fillet.setValue(float(job.BlockFillet))
 
-        self.grp_injection.setChecked(bool(getattr(job, "InjectionPort", True)))
+        # Filling method
+        inj = bool(getattr(job, "InjectionPort", False))
+        pour = bool(getattr(job, "PourPort", False))
+        if inj:
+            fill_method = "Syringe injection"
+        elif pour:
+            fill_method = "Pour port"
+        else:
+            fill_method = "None"
+        self.cb_fill_method.setCurrentText(fill_method)
+        self._on_fill_method_changed(fill_method)
+
+        self.sb_overpour.setValue(
+            float(getattr(job, "OverpourPercent", DEFAULTS["OverpourPercent"]))
+        )
+
+        # Syringe specifics
         if hasattr(job, "SyringeSize"):
             self.cb_syringe.setCurrentText(job.SyringeSize)
         self.sb_inj_dia.setValue(
@@ -1335,6 +1590,11 @@ class MoldWizardPanel(object):
                     )
             except Exception:
                 pass
+
+        # Pour port specifics
+        self.sb_pour_dia.setValue(float(getattr(job, "PourDiameter", 8.0)))
+        self.sb_funnel_dia.setValue(float(getattr(job, "FunnelDiameter", 18.0)))
+        self.sb_funnel_depth.setValue(float(getattr(job, "FunnelDepth", 6.0)))
 
         self.grp_gutter.setChecked(bool(job.Gutter))
         self.sb_gutter_w.setValue(float(job.GutterWidth))
@@ -1371,6 +1631,19 @@ class MoldWizardPanel(object):
         self.sb_key_height.setValue(float(job.KeyHeight))
         self.sb_key_clearance.setValue(float(job.KeyClearance))
         self.sb_key_inset.setValue(float(job.KeyInset))
+
+        self.grp_hardware.setChecked(bool(getattr(job, "Bolts", False)))
+        self.sb_bolt_count.setValue(int(getattr(job, "BoltCount", 4)))
+        if hasattr(job, "BoltSize"):
+            self.cb_bolt_size.setCurrentText(job.BoltSize)
+        self.sb_bolt_inset.setValue(
+            float(getattr(job, "BoltInset", DEFAULTS["BoltInset"]))
+        )
+        self.sb_bolt_clearance.setValue(
+            float(getattr(job, "BoltClearance", 0.3))
+        )
+        self.chk_counterbore.setChecked(bool(getattr(job, "Counterbore", True)))
+        self.chk_nut_trap.setChecked(bool(getattr(job, "NutTrap", True)))
 
         self.grp_pry.setChecked(bool(job.PrySlots))
         self.sb_pry_w.setValue(float(job.PrySlotWidth))
