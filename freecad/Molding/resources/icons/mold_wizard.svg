@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Two-piece mold block: upper half -->
+  <rect x="6" y="6" width="52" height="22" rx="3" fill="#a8b0ba"/>
+  <!-- Two-piece mold block: lower half -->
+  <rect x="6" y="32" width="52" height="22" rx="3" fill="#707880"/>
+  <!-- Parting line -->
+  <line x1="6" y1="29" x2="58" y2="29" stroke="#505860" stroke-width="1.5" stroke-dasharray="4,2"/>
+  <!-- Cavity in upper half (dome) -->
+  <path d="M22 28 v-6 a10 10 0 0 1 20 0 v6 z" fill="#2a2e34"/>
+  <!-- Cavity in lower half (bowl) -->
+  <path d="M22 32 v4 a10 10 0 0 0 20 0 v-4 z" fill="#2a2e34"/>
+  <!-- Syringe / injection channel from top -->
+  <rect x="30" y="2" width="4" height="10" rx="1.5" fill="#d4863a"/>
+  <!-- Syringe barrel flare -->
+  <rect x="28" y="2" width="8" height="3" rx="1.5" fill="#d4863a"/>
+  <!-- Registration key bumps (left) -->
+  <circle cx="14" cy="29" r="2.5" fill="#5a8cbf"/>
+  <!-- Registration key bumps (right) -->
+  <circle cx="50" cy="29" r="2.5" fill="#5a8cbf"/>
+  <!-- Vent holes at top -->
+  <circle cx="18" cy="6" r="1.5" fill="#e8e8e8"/>
+  <circle cx="46" cy="6" r="1.5" fill="#e8e8e8"/>
+  <!-- Sparkle / wand star (wizard accent) -->
+  <g transform="translate(53,10)">
+    <path d="M0,-5 L1.2,-1.2 L5,0 L1.2,1.2 L0,5 L-1.2,1.2 L-5,0 L-1.2,-1.2 Z" fill="#f0c040"/>
+  </g>
+</svg>

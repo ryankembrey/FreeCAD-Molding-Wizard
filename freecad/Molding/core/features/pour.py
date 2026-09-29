@@ -1,0 +1,223 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# SPDX-FileNotice: Part of the Molding addon for FreeCAD.
+
+"""Everything to do with getting silicone in and air out.
+
+The gutter is the important one for the overfill and press method: pour more
+silicone than the cavity needs, close the mould, and the surplus has to go
+somewhere. Without a gutter it goes across the whole parting face, holds the
+halves apart, and every part comes out with a thick flash line and a wrong
+dimension across the split.
+"""
+
+import math
+
+import FreeCAD as App
+import Part
+
+from ..analysis import outer_wires, section_face
+from ..models import GUTTER_ABOVE, GUTTER_BELOW, GUTTER_BOTH
+
+
+def add_gutter(pieces, wires, parting_height, width, depth, gap, side, relief_count=4):
+    """Cut a moat around the cavity opening, on the parting face.
+
+    ``gap`` leaves a land between the cavity and the moat so the two halves
+    still seal against each other; the relief slots are the deliberate leak
+    path through that land.
+    """
+    if width <= 0 or depth <= 0 or not wires:
+        return 0
+
+    made = 0
+    for wire in outer_wires(wires):
+        ring = _ring_face(wire, gap, width)
+        if ring is None:
+            continue
+        targets = _targets(pieces, side)
+        for piece, direction in targets:
+            solid = ring.extrude(App.Vector(0, 0, depth * direction))
+            piece.cut(solid)
+        if relief_count > 0 and gap > 1e-6:
+            for piece, direction in targets:
+                for solid in _relief_slots(
+                    wire, gap, width, depth, parting_height, relief_count, direction
+                ):
+                    piece.cut(solid)
+        made += 1
+    return made
+
+
+def _targets(pieces, side):
+    out = []
+    for piece in pieces:
+        if piece.side == "above" and side in (GUTTER_ABOVE, GUTTER_BOTH):
+            out.append((piece, 1.0))
+        elif piece.side == "below" and side in (GUTTER_BELOW, GUTTER_BOTH):
+            out.append((piece, -1.0))
+    return out
+
+
+def _ring_face(wire, gap, width):
+    try:
+        inner = wire.makeOffset2D(gap) if gap > 1e-9 else wire.copy()
+        outer = wire.makeOffset2D(gap + width)
+        inner_face = section_face([inner])
+        outer_face = section_face([outer])
+        if inner_face is None or outer_face is None:
+            return None
+        ring = outer_face.cut(inner_face)
+        return ring if ring.Area > 1e-9 else None
+    except Exception:
+        return None
+
+
+def _relief_slots(wire, gap, width, depth, height, count, direction):
+    """Short channels through the land, so surplus can reach the gutter.
+
+    Each channel is a small cylinder sitting just clear of the parting plane
+    on the gutter side, so it opens the land without scoring the face of the
+    piece that has no gutter in it.
+    """
+    slots = []
+    radius = max(min(depth * 0.4, width * 0.4), 0.5)
+    axis_z = height + direction * (radius + 0.05)
+    try:
+        centre = wire.BoundBox.Center
+        samples = wire.discretize(Number=180)
+        length = gap + width + 3.0
+        for i in range(count):
+            angle = 2.0 * math.pi * i / float(count)
+            ray = App.Vector(math.cos(angle), math.sin(angle), 0.0)
+            hit = _point_towards(samples, centre, ray)
+            if hit is None:
+                continue
+            start = App.Vector(hit.x, hit.y, axis_z) - ray * 1.5
+            slots.append(Part.makeCylinder(radius, length, start, ray))
+    except Exception:
+        return []
+    return slots
+
+
+def _point_towards(samples, centre, ray):
+    """Sample point sitting furthest along the given direction."""
+    best = None
+    best_score = None
+    for point in samples:
+        offset = App.Vector(point.x - centre.x, point.y - centre.y, 0.0)
+        if offset.Length < 1e-9:
+            continue
+        score = (offset.x * ray.x + offset.y * ray.y) / offset.Length
+        if best_score is None or score > best_score:
+            best_score = score
+            best = point
+    return best
+
+
+def add_pour_port(pieces, wires, parting_height, block_top, diameter, funnel_d, funnel_h):
+    """A hole from the top of the mould down into the cavity, with a funnel.
+
+    Only cut into pieces above the parting plane: the pour port belongs on
+    whichever piece goes on last.
+    """
+    if diameter <= 0 or not wires:
+        return False
+    face = section_face(wires)
+    if face is None:
+        return False
+    point = face.CenterOfMass
+    centre = App.Vector(point.x, point.y, parting_height)
+    if not face.isInside(App.Vector(point.x, point.y, parting_height), 1e-3, True):
+        # A crescent shaped section can put the centroid outside the material,
+        # so fall back to a point that is definitely over the cavity.
+        try:
+            centre = App.Vector(face.Vertexes[0].Point)
+            centre.z = parting_height
+        except Exception:
+            return False
+
+    height = max(block_top - parting_height + 1.0, 1.0)
+    bore = Part.makeCylinder(diameter / 2.0, height, centre, App.Vector(0, 0, 1))
+    tools = [bore]
+    if funnel_d > diameter and funnel_h > 0:
+        funnel = Part.makeCone(
+            diameter / 2.0,
+            funnel_d / 2.0,
+            funnel_h,
+            App.Vector(centre.x, centre.y, block_top - funnel_h),
+            App.Vector(0, 0, 1),
+        )
+        tools.append(funnel)
+
+    cut_any = False
+    for piece in pieces:
+        if piece.side != "above":
+            continue
+        for tool in tools:
+            piece.cut(tool)
+        cut_any = True
+    return cut_any
+
+
+def add_vents(pieces, wires, parting_height, block_top, count, diameter,
+              vent_shape="Cylinder", vent_width=2.0, vent_length=4.0,
+              custom_positions=None):
+    """Thin risers at the extremities of the cavity, where air gets trapped.
+
+    *vent_shape* selects cylindrical (default) or rectangular cross section.
+    *custom_positions* is an optional list of ``App.Vector`` in local frame;
+    when provided the vents are placed at those XY coordinates instead of
+    being auto-distributed along the outer wires.
+
+    Returns ``(count_placed, positions)`` where *positions* is a list of the
+    ``App.Vector`` base points actually used (in local coordinates).
+    """
+    if count <= 0 or not wires:
+        return 0, []
+    if diameter <= 0 and vent_shape != "Rectangular":
+        return 0, []
+
+    made = 0
+    positions = []
+    height = max(block_top - parting_height + 1.0, 1.0)
+
+    if custom_positions:
+        all_points = list(custom_positions)
+    else:
+        all_points = []
+        for wire in outer_wires(wires):
+            all_points.extend(_spread(wire, count))
+
+    is_rect = vent_shape == "Rectangular" and vent_width > 0 and vent_length > 0
+    for point in all_points:
+        base = App.Vector(point.x, point.y, parting_height)
+        if is_rect:
+            tool = Part.makeBox(
+                vent_width,
+                vent_length,
+                height,
+                App.Vector(
+                    base.x - vent_width / 2.0,
+                    base.y - vent_length / 2.0,
+                    base.z,
+                ),
+            )
+        else:
+            tool = Part.makeCylinder(
+                diameter / 2.0, height, base, App.Vector(0, 0, 1),
+            )
+        for piece in pieces:
+            if piece.side == "above":
+                piece.cut(tool)
+        positions.append(base)
+        made += 1
+    return made, positions
+
+
+def _spread(wire, count):
+    try:
+        samples = wire.discretize(Number=max(count * 8, 16))
+    except Exception:
+        return []
+    step = max(len(samples) // count, 1)
+    return [samples[i * step] for i in range(count) if i * step < len(samples)]
