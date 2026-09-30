@@ -64,37 +64,33 @@ def add_bolts(pieces, points, block_bottom, block_top, size, clearance, counterb
     return made
 
 
-def bolt_points(bound_box, inset, style_is_cylinder, parting_height, count=4):
-    """Distribute *count* bolt positions around the block perimeter.
+def bolt_candidates(bound_box, inset, style_is_cylinder, parting_height, density=24):
+    """Generate a dense ring of candidate bolt positions.
 
-    Cylinder blocks: evenly spaced on a circle, offset by half a step from
-    the registration key angles (45/135/225/315) so bolts and keys never
-    share a position.
+    Returns many more candidates than the final bolt count so the caller
+    can filter by cavity clearance and feature proximity, then greedily
+    pick the best-spaced subset.
 
-    Box blocks: walk the rectangle perimeter and space *count* points
-    evenly along it, staying *inset* from the outer face.  The walk starts
-    at the midpoint of the bottom edge so that with count=4 you get one
-    bolt per side, nicely centred.
+    *density* controls how many candidates are placed around the perimeter
+    (default 24, giving 15-degree spacing on a cylinder).
     """
-    if count < 1:
-        return []
+    if density < 4:
+        density = 4
 
     centre_x = bound_box.Center.x
     centre_y = bound_box.Center.y
 
     if style_is_cylinder:
-        radius = max(0.5 * math.hypot(bound_box.XLength, bound_box.YLength) - inset, 1.0)
-        # Registration keys sit at 45 + n*90.  Offset bolt ring by
-        # half a step so they interleave.
-        step = 360.0 / count
-        start = step / 2.0
+        # The bounding box of a cylinder has XLength == YLength == diameter.
+        # Use the actual cylinder radius, not the bounding box diagonal.
+        radius = max(min(bound_box.XLength, bound_box.YLength) / 2.0 - inset, 1.0)
         return [
             App.Vector(
-                centre_x + radius * math.cos(math.radians(start + step * i)),
-                centre_y + radius * math.sin(math.radians(start + step * i)),
+                centre_x + radius * math.cos(math.radians(360.0 * i / density)),
+                centre_y + radius * math.sin(math.radians(360.0 * i / density)),
                 parting_height,
             )
-            for i in range(count)
+            for i in range(density)
         ]
 
     # Box: walk the inset rectangle perimeter
@@ -108,27 +104,91 @@ def bolt_points(bound_box, inset, style_is_cylinder, parting_height, count=4):
     w = x1 - x0
     h = y1 - y0
     perimeter = 2.0 * (w + h)
-    step = perimeter / count
+    step = perimeter / density
 
-    # Offset by half a step so bolts land between the corners where
-    # registration keys sit.
-    start = step / 2.0
     points = []
-    for i in range(count):
-        d = (start + step * i) % perimeter
+    for i in range(density):
+        d = (step * i) % perimeter
         if d < w:
-            # bottom edge, left to right
             points.append(App.Vector(x0 + d, y0, parting_height))
         elif d < w + h:
-            # right edge, bottom to top
             points.append(App.Vector(x1, y0 + (d - w), parting_height))
         elif d < 2 * w + h:
-            # top edge, right to left
             points.append(App.Vector(x1 - (d - w - h), y1, parting_height))
         else:
-            # left edge, top to bottom
             points.append(App.Vector(x0, y1 - (d - 2 * w - h), parting_height))
     return points
+
+
+def select_bolt_positions(candidates, count, feature_points=None, min_feature_dist=8.0):
+    """Greedily pick *count* positions that maximise mutual spacing.
+
+    *feature_points* is an optional list of ``App.Vector`` positions of
+    existing features (keys, vents, injection port, gutter).  Candidates
+    closer than *min_feature_dist* to any feature are penalised rather
+    than discarded outright, so a crowded mold still gets some bolts.
+    """
+    if not candidates:
+        return []
+    if count <= 0:
+        return []
+
+    # Score each candidate: distance to nearest feature (lower = worse).
+    # Candidates well clear of features get score 1.0; those within
+    # min_feature_dist get a fractional score that deprioritises them.
+    scores = []
+    for pt in candidates:
+        score = 1.0
+        if feature_points:
+            for fp in feature_points:
+                dx = pt.x - fp.x
+                dy = pt.y - fp.y
+                dist = math.sqrt(dx * dx + dy * dy)
+                if dist < min_feature_dist:
+                    score = min(score, dist / min_feature_dist)
+        scores.append(score)
+
+    # Greedy selection: repeatedly pick the candidate with the best
+    # combined score (feature clearance * distance to already-selected).
+    selected = []
+    used = [False] * len(candidates)
+    for _ in range(min(count, len(candidates))):
+        best_idx = -1
+        best_merit = -1.0
+        for i, pt in enumerate(candidates):
+            if used[i]:
+                continue
+            if scores[i] < 0.01:
+                continue  # essentially on top of a feature
+            # Distance to nearest already-selected bolt
+            if selected:
+                nearest = min(
+                    math.sqrt(
+                        (pt.x - s.x) ** 2 + (pt.y - s.y) ** 2
+                    )
+                    for s in selected
+                )
+            else:
+                nearest = 1e6  # first pick: all equally good spatially
+            merit = nearest * scores[i]
+            if merit > best_merit:
+                best_merit = merit
+                best_idx = i
+        if best_idx < 0:
+            break
+        selected.append(candidates[best_idx])
+        used[best_idx] = True
+    return selected
+
+
+def bolt_points(bound_box, inset, style_is_cylinder, parting_height, count=4):
+    """Legacy wrapper: return *count* evenly spaced bolt positions.
+
+    New code should use ``bolt_candidates`` + ``select_bolt_positions``
+    for better results with feature avoidance.
+    """
+    candidates = bolt_candidates(bound_box, inset, style_is_cylinder, parting_height, density=count)
+    return candidates[:count]
 
 
 def add_pry_slots(pieces, bound_box, parting_height, width, depth):

@@ -172,6 +172,8 @@ def build(job):
             except Exception:
                 pass
 
+        inj_style = getattr(job, "InjectionStyle", "Luer Lock")
+
         inj_centre = _guard(
             result,
             "injection port",
@@ -184,6 +186,7 @@ def build(job):
             float(getattr(job, "InjectionDiameter", 3.0)),
             float(getattr(job, "InjectionChannelLength", 5.0)),
             custom_inj,
+            inj_style,
         )
         if inj_centre is not None:
             result.feature_points.append({
@@ -234,6 +237,8 @@ def build(job):
             float(getattr(job, "VentWidth", 2.0)),
             float(getattr(job, "VentLength", 4.0)),
             custom_vent_pos,
+            str(getattr(job, "VentDirection", "Up")),
+            block_box,
         )
         if vent_result is not None:
             vent_count, vent_positions = vent_result
@@ -246,16 +251,29 @@ def build(job):
 
     if getattr(job, "Bolts", False):
         requested = int(getattr(job, "BoltCount", 4))
-        candidates = fasteners.bolt_points(
-            block_box, float(job.BoltInset), style_is_cylinder,
-            parting_height, requested,
-        )
         bolt_spec = fasteners.BOLTS.get(job.BoltSize, {})
         bolt_hole_r = (bolt_spec.get("clearance", 4.5) + float(job.BoltClearance)) / 2.0
-        points = [
+
+        # Generate a dense ring of candidates and filter by cavity clearance
+        candidates = fasteners.bolt_candidates(
+            block_box, float(job.BoltInset), style_is_cylinder,
+            parting_height, density=max(requested * 6, 24),
+        )
+        candidates = [
             p for p in candidates
             if not _bolt_hits_part(part, p, bolt_hole_r, block_box)
         ]
+
+        # Collect existing feature positions (XY only) for avoidance
+        feature_xy = [
+            App.Vector(fp["point"].x, fp["point"].y, parting_height)
+            for fp in result.feature_points
+        ]
+        min_feat_dist = bolt_hole_r * 2.0 + 2.0  # bolt radius + structural margin
+
+        points = fasteners.select_bolt_positions(
+            candidates, requested, feature_xy, min_feat_dist,
+        )
         _guard(
             result,
             "bolt holes",
@@ -273,8 +291,8 @@ def build(job):
         if placed < requested:
             result.warnings.append(
                 "Only %d of %d bolt(s) placed; the rest were too close to "
-                "the cavity. Increase the wall thickness or reduce the bolt "
-                "count." % (placed, requested)
+                "the cavity or other features. Increase the wall thickness "
+                "or reduce the bolt count." % (placed, requested)
             )
         result.notes.append("Bolts placed: %d" % placed)
         for bp in points:
@@ -309,6 +327,22 @@ def build(job):
             "type": "pry",
             "point": App.Vector(cx - reach, cy, parting_height),
         })
+
+    if getattr(job, "Emboss", False):
+        from ..core.features import emboss
+
+        _guard(
+            result,
+            "text embossment",
+            emboss.add_emboss,
+            pieces,
+            block_box,
+            parting_height,
+            str(getattr(job, "EmbossText", "")),
+            float(getattr(job, "EmbossFontSize", 5.0)),
+            float(getattr(job, "EmbossDepth", 0.8)),
+            str(getattr(job, "EmbossPlacement", "Side wall")),
+        )
 
     _measure(result, part, parting_height, float(job.OverpourPercent))
 

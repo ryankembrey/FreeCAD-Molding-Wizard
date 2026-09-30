@@ -18,14 +18,20 @@ from ..core.models import (
     DEFAULT_SHRINK_PERCENT,
     DEFAULT_SYRINGE,
     DEFAULTS,
+    EMBOSS_PLACEMENTS,
+    EMBOSS_SIDE_WALL,
     EXPORT_FORMATS,
     EXPORT_STL,
     GUTTER_ABOVE,
     GUTTER_SIDES,
+    INJECTION_LUER_LOCK,
+    INJECTION_STYLES,
     LAYOUT_TWO,
     LAYOUTS,
     SYRINGE_SIZE_LIST,
     VENT_CYLINDER,
+    VENT_DIR_UP,
+    VENT_DIRECTIONS,
     VENT_SHAPES,
 )
 from . import build as buildmod
@@ -265,6 +271,15 @@ def add_properties(obj):
     prop("App::PropertyBool", "InjectionPort", "Injection", "Add a syringe injection port", True)
     prop(
         "App::PropertyEnumeration",
+        "InjectionStyle",
+        "Injection",
+        "Luer Lock: collar recess for locking syringes. "
+        "Friction Fit: plain tapered hole for a slip-tip syringe.",
+        INJECTION_LUER_LOCK,
+        INJECTION_STYLES,
+    )
+    prop(
+        "App::PropertyEnumeration",
         "SyringeSize",
         "Injection",
         "Syringe barrel size (determines Luer lock dimensions)",
@@ -304,6 +319,15 @@ def add_properties(obj):
     )
     prop("App::PropertyDistance", "VentWidth", "Vents", "Width of rectangular vents", DEFAULTS["VentWidth"])
     prop("App::PropertyDistance", "VentLength", "Vents", "Length of rectangular vents", DEFAULTS["VentLength"])
+    prop(
+        "App::PropertyEnumeration",
+        "VentDirection",
+        "Vents",
+        "Up: through the roof. Down: through the floor. "
+        "Nearest wall: horizontally to the closest block wall.",
+        VENT_DIR_UP,
+        VENT_DIRECTIONS,
+    )
     prop("App::PropertyVectorList", "VentPositions", "Vents", "Custom vent placement points (global coordinates)")
     prop("App::PropertyBool", "UseCustomVentPositions", "Vents", "Use manually picked vent positions", False)
 
@@ -337,6 +361,22 @@ def add_properties(obj):
     prop("App::PropertyFloat", "SuggestedPour", "Results", "Cavity plus overpour, in ml", 0.0, read_only=True)
     prop("App::PropertyStringList", "Warnings", "Results", "Problems from the build", read_only=True)
     prop("App::PropertyStringList", "Notes", "Results", "Observations from the build", read_only=True)
+
+    # -- Embossment --
+    prop("App::PropertyBool", "Emboss", "Embossment", "Deboss identification text on mold pieces", False)
+    prop(
+        "App::PropertyEnumeration",
+        "EmbossPlacement",
+        "Embossment",
+        "Side wall: outer side face. "
+        "Outer face: floor bottom / roof top. "
+        "Inner face: parting surfaces visible when the mold is open.",
+        EMBOSS_SIDE_WALL,
+        EMBOSS_PLACEMENTS,
+    )
+    prop("App::PropertyString", "EmbossText", "Embossment", "Custom label (empty for automatic UPPER/LOWER)", "")
+    prop("App::PropertyFloat", "EmbossFontSize", "Embossment", "Letter height in mm", 5.0)
+    prop("App::PropertyFloat", "EmbossDepth", "Embossment", "Cut depth in mm", 0.8)
 
     # -- Export --
     prop("App::PropertyPath", "OutputDirectory", "Export", "Where exported pieces are written")

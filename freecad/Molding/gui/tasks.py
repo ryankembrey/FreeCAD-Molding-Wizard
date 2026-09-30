@@ -27,10 +27,16 @@ from ..core.models import (
     BLOCK_STYLES,
     BOLT_SIZES,
     DEFAULTS,
+    EMBOSS_PLACEMENTS,
+    EMBOSS_SIDE_WALL,
     GUTTER_SIDES,
+    INJECTION_LUER_LOCK,
+    INJECTION_STYLES,
     LAYOUTS,
     LAYOUT_TWO,
     SYRINGE_SIZE_LIST,
+    VENT_DIR_UP,
+    VENT_DIRECTIONS,
     VENT_SHAPES,
 )
 from . import pick
@@ -95,6 +101,7 @@ _WIZARD_STEPS = [
     ("keys",      "Registration Keys"),
     ("hardware",  "Hardware"),
     ("pry",       "Pry Slots"),
+    ("emboss",    "Embossment"),
 ]
 
 
@@ -263,6 +270,7 @@ class MoldWizardPanel(object):
         self._build_keys_group(root)
         self._build_hardware_group(root)
         self._build_pry_group(root)
+        self._build_emboss_group(root)
         root.addStretch(1)
 
         # Wizard navigation (hidden until wizard mode is on)
@@ -415,17 +423,6 @@ class MoldWizardPanel(object):
 
         g.addWidget(self.pb_pull, 0, 0)
         g.addWidget(fw, 0, 1)
-
-        self.sb_parting = self._spin(
-            value=0.0, minimum=-500.0, maximum=500.0, step=0.5
-        )
-        self.sb_parting.setToolTip(
-            "Height of the parting plane measured from the bottom of the part "
-            "along the pull direction. The auto-suggest places it at the widest "
-            "cross section."
-        )
-        g.addWidget(QtWidgets.QLabel("Parting offset"), 1, 0)
-        g.addWidget(self.sb_parting, 1, 1)
         root.addWidget(box)
         self._step_widgets.append(box)
 
@@ -455,12 +452,23 @@ class MoldWizardPanel(object):
         self.cb_layout.currentTextChanged.connect(self._on_layout_changed)
         g.addWidget(self.cb_layout, 0, 1)
 
+        self.sb_parting = self._spin(
+            value=0.0, minimum=-500.0, maximum=500.0, step=0.5
+        )
+        self.sb_parting.setToolTip(
+            "Height of the parting plane measured from the bottom of the part "
+            "along the pull direction. The auto-suggest places it at the widest "
+            "cross section."
+        )
+        g.addWidget(QtWidgets.QLabel("Parting offset"), 1, 0)
+        g.addWidget(self.sb_parting, 1, 1)
+
         lbl_angle = QtWidgets.QLabel("Secondary angle")
         lbl_angle.setToolTip(
             "Rotation of the second splitting plane around the pull axis. "
             "Only used for three piece layouts."
         )
-        g.addWidget(lbl_angle, 1, 0)
+        g.addWidget(lbl_angle, 2, 0)
         self.sb_secondary_angle = self._spin(
             value=0.0, minimum=0.0, maximum=360.0, step=5.0,
             decimals=1, suffix="°"
@@ -469,7 +477,7 @@ class MoldWizardPanel(object):
             "Angle in degrees. 0 splits along X, 90 along Y, etc."
         )
         self.sb_secondary_angle.setEnabled(False)
-        g.addWidget(self.sb_secondary_angle, 1, 1)
+        g.addWidget(self.sb_secondary_angle, 2, 1)
 
         root.addWidget(box)
         self._step_widgets.append(box)
@@ -567,7 +575,7 @@ class MoldWizardPanel(object):
         self.injection_widgets = []
 
         lbl_syr = QtWidgets.QLabel("Syringe size")
-        lbl_syr.setToolTip("Barrel volume sets the Luer lock taper dimensions (ISO 80369-7).")
+        lbl_syr.setToolTip("Barrel volume sets the Luer taper dimensions (ISO 80369-7).")
         g.addWidget(lbl_syr, 2, 0)
         self.cb_syringe = QtWidgets.QComboBox()
         self.cb_syringe.addItems(SYRINGE_SIZE_LIST)
@@ -580,14 +588,28 @@ class MoldWizardPanel(object):
         g.addWidget(self.cb_syringe, 2, 1)
         self.injection_widgets.extend([lbl_syr, self.cb_syringe])
 
+        lbl_style = QtWidgets.QLabel("Adapter style")
+        lbl_style.setToolTip("How the syringe connects to the mold.")
+        g.addWidget(lbl_style, 3, 0)
+        self.cb_inj_style = QtWidgets.QComboBox()
+        self.cb_inj_style.addItems(INJECTION_STYLES)
+        self.cb_inj_style.setCurrentText(INJECTION_LUER_LOCK)
+        self._compact_combo(self.cb_inj_style)
+        self.cb_inj_style.setToolTip(
+            "Luer Lock: collar recess so a locking syringe clicks in.\n"
+            "Friction Fit: plain tapered hole for a slip-tip syringe."
+        )
+        g.addWidget(self.cb_inj_style, 3, 1)
+        self.injection_widgets.extend([lbl_style, self.cb_inj_style])
+
         self.sb_inj_dia = self._spin(value=DEFAULTS["InjectionDiameter"], step=0.5)
         self.sb_inj_dia.setToolTip(
             "Bore diameter of the injection channel from the cavity to the "
             "adapter seat. 3 mm is typical for low viscosity silicone."
         )
         lbl_cd = QtWidgets.QLabel("Channel diameter")
-        g.addWidget(lbl_cd, 3, 0)
-        g.addWidget(self.sb_inj_dia, 3, 1)
+        g.addWidget(lbl_cd, 4, 0)
+        g.addWidget(self.sb_inj_dia, 4, 1)
         self.injection_widgets.extend([lbl_cd, self.sb_inj_dia])
 
         self.sb_inj_len = self._spin(value=DEFAULTS["InjectionChannelLength"], step=1.0)
@@ -596,8 +618,8 @@ class MoldWizardPanel(object):
             "recess. Longer channels let you trim the sprue more cleanly."
         )
         lbl_cl = QtWidgets.QLabel("Channel length")
-        g.addWidget(lbl_cl, 4, 0)
-        g.addWidget(self.sb_inj_len, 4, 1)
+        g.addWidget(lbl_cl, 5, 0)
+        g.addWidget(self.sb_inj_len, 5, 1)
         self.injection_widgets.extend([lbl_cl, self.sb_inj_len])
 
         # Custom placement button
@@ -614,8 +636,8 @@ class MoldWizardPanel(object):
         self.le_inj_pos.setReadOnly(True)
         self.le_inj_pos.setMinimumHeight(28)
         self.le_inj_pos.setPlaceholderText("Auto (centre)")
-        g.addWidget(self.pb_inj_place, 5, 0)
-        g.addWidget(self.le_inj_pos, 5, 1)
+        g.addWidget(self.pb_inj_place, 6, 0)
+        g.addWidget(self.le_inj_pos, 6, 1)
         self.injection_widgets.extend([self.pb_inj_place, self.le_inj_pos])
 
         # -- Pour sub-widgets --
@@ -624,22 +646,22 @@ class MoldWizardPanel(object):
         self.sb_pour_dia = self._spin(value=8.0, step=0.5)
         self.sb_pour_dia.setToolTip("Bore diameter of the pour hole.")
         lbl_pd = QtWidgets.QLabel("Pour diameter")
-        g.addWidget(lbl_pd, 6, 0)
-        g.addWidget(self.sb_pour_dia, 6, 1)
+        g.addWidget(lbl_pd, 7, 0)
+        g.addWidget(self.sb_pour_dia, 7, 1)
         self.pour_widgets.extend([lbl_pd, self.sb_pour_dia])
 
         self.sb_funnel_dia = self._spin(value=18.0, step=1.0)
         self.sb_funnel_dia.setToolTip("Mouth diameter of the funnel cone at the top of the block.")
         lbl_fd = QtWidgets.QLabel("Funnel diameter")
-        g.addWidget(lbl_fd, 7, 0)
-        g.addWidget(self.sb_funnel_dia, 7, 1)
+        g.addWidget(lbl_fd, 8, 0)
+        g.addWidget(self.sb_funnel_dia, 8, 1)
         self.pour_widgets.extend([lbl_fd, self.sb_funnel_dia])
 
         self.sb_funnel_depth = self._spin(value=6.0, step=0.5)
         self.sb_funnel_depth.setToolTip("Depth of the funnel cone from the block top surface.")
         lbl_fdp = QtWidgets.QLabel("Funnel depth")
-        g.addWidget(lbl_fdp, 8, 0)
-        g.addWidget(self.sb_funnel_depth, 8, 1)
+        g.addWidget(lbl_fdp, 9, 0)
+        g.addWidget(self.sb_funnel_depth, 9, 1)
         self.pour_widgets.extend([lbl_fdp, self.sb_funnel_depth])
 
         # Hide pour widgets by default (syringe is selected)
@@ -720,9 +742,9 @@ class MoldWizardPanel(object):
         box.setCheckable(True)
         box.setChecked(True)
         box.setToolTip(
-            "Small holes through the upper mold half to let trapped air "
-            "escape during injection. More vents reduce the chance of "
-            "bubbles in the casting. Uncheck to omit."
+            "Small channels to let trapped air escape during injection. "
+            "More vents reduce the chance of bubbles in the casting. "
+            "Uncheck to omit."
         )
         self.grp_vents = box
         g = self._grid(box)
@@ -751,6 +773,21 @@ class MoldWizardPanel(object):
         self.cb_vent_shape.currentTextChanged.connect(self._on_vent_shape_changed)
         g.addWidget(self.cb_vent_shape, 1, 1)
 
+        # Vent direction
+        lbl_dir = QtWidgets.QLabel("Direction")
+        lbl_dir.setToolTip("Which way the vent channels exit the mold.")
+        g.addWidget(lbl_dir, 2, 0)
+        self.cb_vent_direction = QtWidgets.QComboBox()
+        self.cb_vent_direction.addItems(VENT_DIRECTIONS)
+        self.cb_vent_direction.setCurrentText(VENT_DIR_UP)
+        self._compact_combo(self.cb_vent_direction)
+        self.cb_vent_direction.setToolTip(
+            "Up: through the roof (default).\n"
+            "Down: through the floor.\n"
+            "Nearest wall: horizontally to the closest block wall."
+        )
+        g.addWidget(self.cb_vent_direction, 2, 1)
+
         # Diameter (shown for Cylinder)
         self.lbl_vent_dia = QtWidgets.QLabel("Diameter")
         self.sb_vent_dia = self._spin(value=DEFAULTS["VentDiameter"], step=0.25)
@@ -758,21 +795,21 @@ class MoldWizardPanel(object):
             "Bore diameter of each vent. Keep this small enough that "
             "silicone does not leak through (1.0 to 2.0 mm typical)."
         )
-        g.addWidget(self.lbl_vent_dia, 2, 0)
-        g.addWidget(self.sb_vent_dia, 2, 1)
+        g.addWidget(self.lbl_vent_dia, 3, 0)
+        g.addWidget(self.sb_vent_dia, 3, 1)
 
         # Width and Length (shown for Rectangular)
         self.lbl_vent_width = QtWidgets.QLabel("Width")
         self.sb_vent_width = self._spin(value=DEFAULTS["VentWidth"], step=0.5)
         self.sb_vent_width.setToolTip("Width of the rectangular vent slot.")
-        g.addWidget(self.lbl_vent_width, 3, 0)
-        g.addWidget(self.sb_vent_width, 3, 1)
+        g.addWidget(self.lbl_vent_width, 4, 0)
+        g.addWidget(self.sb_vent_width, 4, 1)
 
         self.lbl_vent_length = QtWidgets.QLabel("Length")
         self.sb_vent_length = self._spin(value=DEFAULTS["VentLength"], step=0.5)
         self.sb_vent_length.setToolTip("Length of the rectangular vent slot.")
-        g.addWidget(self.lbl_vent_length, 4, 0)
-        g.addWidget(self.sb_vent_length, 4, 1)
+        g.addWidget(self.lbl_vent_length, 5, 0)
+        g.addWidget(self.sb_vent_length, 5, 1)
 
         # Hide rectangular fields by default
         self.lbl_vent_width.hide()
@@ -811,8 +848,8 @@ class MoldWizardPanel(object):
         pick_widget = QtWidgets.QWidget()
         pick_widget.setLayout(pick_row)
 
-        g.addWidget(self.pb_vent_place, 5, 0)
-        g.addWidget(pick_widget, 5, 1)
+        g.addWidget(self.pb_vent_place, 6, 0)
+        g.addWidget(pick_widget, 6, 1)
 
         root.addWidget(box)
         self._step_widgets.append(box)
@@ -974,6 +1011,68 @@ class MoldWizardPanel(object):
         g.addWidget(self.sb_pry_w, 0, 1)
         g.addWidget(QtWidgets.QLabel("Depth"), 1, 0)
         g.addWidget(self.sb_pry_d, 1, 1)
+        root.addWidget(box)
+        self._step_widgets.append(box)
+
+    # --- Embossment ---
+
+    def _build_emboss_group(self, root):
+        box = QtWidgets.QGroupBox("Embossment")
+        box.setCheckable(True)
+        box.setChecked(False)
+        box.setToolTip(
+            "Deboss identification text into the side walls of each mold "
+            "piece, so you can tell upper from lower at a glance. The text "
+            "is placed on the front wall, away from the print bed faces."
+        )
+        self.grp_emboss = box
+        g = self._grid(box)
+
+        lbl_text = QtWidgets.QLabel("Label text")
+        lbl_text.setToolTip(
+            "Custom text to cut into each piece. Leave empty for automatic "
+            "labels (UPPER, LOWER, LEFT, RIGHT)."
+        )
+        g.addWidget(lbl_text, 0, 0)
+        self.le_emboss_text = QtWidgets.QLineEdit()
+        self.le_emboss_text.setMinimumHeight(28)
+        self.le_emboss_text.setPlaceholderText("Auto (UPPER / LOWER)")
+        self.le_emboss_text.setToolTip(
+            "Type your own label or leave blank for automatic piece names."
+        )
+        g.addWidget(self.le_emboss_text, 0, 1)
+
+        self.sb_emboss_size = self._spin(
+            value=5.0, minimum=2.0, maximum=30.0, step=0.5
+        )
+        self.sb_emboss_size.setToolTip("Height of each letter in mm.")
+        g.addWidget(QtWidgets.QLabel("Font size"), 1, 0)
+        g.addWidget(self.sb_emboss_size, 1, 1)
+
+        self.sb_emboss_depth = self._spin(
+            value=0.8, minimum=0.2, maximum=5.0, step=0.1
+        )
+        self.sb_emboss_depth.setToolTip(
+            "How deep the text is cut into the wall. 0.6 to 1.0 mm "
+            "gives a crisp imprint without weakening the wall."
+        )
+        g.addWidget(QtWidgets.QLabel("Cut depth"), 2, 0)
+        g.addWidget(self.sb_emboss_depth, 2, 1)
+
+        lbl_place = QtWidgets.QLabel("Placement")
+        lbl_place.setToolTip("Which surface the text is cut into.")
+        g.addWidget(lbl_place, 3, 0)
+        self.cb_emboss_placement = QtWidgets.QComboBox()
+        self.cb_emboss_placement.addItems(EMBOSS_PLACEMENTS)
+        self.cb_emboss_placement.setCurrentText(EMBOSS_SIDE_WALL)
+        self._compact_combo(self.cb_emboss_placement)
+        self.cb_emboss_placement.setToolTip(
+            "Side wall: outer side face, readable from outside.\n"
+            "Outer face: floor bottom / roof top.\n"
+            "Inner face: parting surfaces visible when the mold is open."
+        )
+        g.addWidget(self.cb_emboss_placement, 3, 1)
+
         root.addWidget(box)
         self._step_widgets.append(box)
 
@@ -1465,6 +1564,7 @@ class MoldWizardPanel(object):
 
         # Injection specifics
         job.SyringeSize = self.cb_syringe.currentText()
+        job.InjectionStyle = self.cb_inj_style.currentText()
         job.InjectionDiameter = self.sb_inj_dia.value()
         job.InjectionChannelLength = self.sb_inj_len.value()
         if self._custom_injection_pos is not None:
@@ -1491,6 +1591,7 @@ class MoldWizardPanel(object):
         job.VentCount = self.sb_vent_count.value() if vent_on else 0
         job.VentDiameter = self.sb_vent_dia.value()
         job.VentShape = self.cb_vent_shape.currentText()
+        job.VentDirection = self.cb_vent_direction.currentText()
         job.VentWidth = self.sb_vent_width.value()
         job.VentLength = self.sb_vent_length.value()
         if self._custom_vent_positions:
@@ -1519,6 +1620,13 @@ class MoldWizardPanel(object):
         job.PrySlots = self.grp_pry.isChecked()
         job.PrySlotWidth = self.sb_pry_w.value()
         job.PrySlotDepth = self.sb_pry_d.value()
+
+        # Embossment
+        job.Emboss = self.grp_emboss.isChecked()
+        job.EmbossText = self.le_emboss_text.text()
+        job.EmbossFontSize = self.sb_emboss_size.value()
+        job.EmbossDepth = self.sb_emboss_depth.value()
+        job.EmbossPlacement = self.cb_emboss_placement.currentText()
 
         # Exploded view
         job.Exploded = float(self.slider_explode.value())
@@ -1574,6 +1682,8 @@ class MoldWizardPanel(object):
         # Syringe specifics
         if hasattr(job, "SyringeSize"):
             self.cb_syringe.setCurrentText(job.SyringeSize)
+        if hasattr(job, "InjectionStyle"):
+            self.cb_inj_style.setCurrentText(job.InjectionStyle)
         self.sb_inj_dia.setValue(
             float(getattr(job, "InjectionDiameter", DEFAULTS["InjectionDiameter"]))
         )
@@ -1610,6 +1720,8 @@ class MoldWizardPanel(object):
         if hasattr(job, "VentShape"):
             self.cb_vent_shape.setCurrentText(job.VentShape)
             self._on_vent_shape_changed(job.VentShape)
+        if hasattr(job, "VentDirection"):
+            self.cb_vent_direction.setCurrentText(job.VentDirection)
         if hasattr(job, "VentWidth"):
             self.sb_vent_width.setValue(float(job.VentWidth))
         if hasattr(job, "VentLength"):
@@ -1648,6 +1760,14 @@ class MoldWizardPanel(object):
         self.grp_pry.setChecked(bool(job.PrySlots))
         self.sb_pry_w.setValue(float(job.PrySlotWidth))
         self.sb_pry_d.setValue(float(job.PrySlotDepth))
+
+        # Embossment
+        self.grp_emboss.setChecked(bool(getattr(job, "Emboss", False)))
+        self.le_emboss_text.setText(str(getattr(job, "EmbossText", "")))
+        self.sb_emboss_size.setValue(float(getattr(job, "EmbossFontSize", 5.0)))
+        self.sb_emboss_depth.setValue(float(getattr(job, "EmbossDepth", 0.8)))
+        if hasattr(job, "EmbossPlacement"):
+            self.cb_emboss_placement.setCurrentText(job.EmbossPlacement)
 
         # Exploded view
         exploded = float(getattr(job, "Exploded", 0.0))

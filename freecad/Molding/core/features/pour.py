@@ -16,7 +16,10 @@ import FreeCAD as App
 import Part
 
 from ..analysis import outer_wires, section_face
-from ..models import GUTTER_ABOVE, GUTTER_BELOW, GUTTER_BOTH
+from ..models import (
+    GUTTER_ABOVE, GUTTER_BELOW, GUTTER_BOTH,
+    VENT_DIR_DOWN, VENT_DIR_NEAREST_WALL, VENT_DIR_UP,
+)
 
 
 def add_gutter(pieces, wires, parting_height, width, depth, gap, side, relief_count=4):
@@ -161,13 +164,18 @@ def add_pour_port(pieces, wires, parting_height, block_top, diameter, funnel_d, 
 
 def add_vents(pieces, wires, parting_height, block_top, count, diameter,
               vent_shape="Cylinder", vent_width=2.0, vent_length=4.0,
-              custom_positions=None):
+              custom_positions=None, direction=VENT_DIR_UP, block_box=None):
     """Thin risers at the extremities of the cavity, where air gets trapped.
 
     *vent_shape* selects cylindrical (default) or rectangular cross section.
     *custom_positions* is an optional list of ``App.Vector`` in local frame;
     when provided the vents are placed at those XY coordinates instead of
     being auto-distributed along the outer wires.
+    *direction* controls where the vent exits:
+        Up: through the upper piece (+Z, the default).
+        Down: through the lower piece (-Z).
+        Nearest wall: horizontally toward the closest block wall, through the
+        upper piece at the parting surface.
 
     Returns ``(count_placed, positions)`` where *positions* is a list of the
     ``App.Vector`` base points actually used (in local coordinates).
@@ -179,7 +187,6 @@ def add_vents(pieces, wires, parting_height, block_top, count, diameter,
 
     made = 0
     positions = []
-    height = max(block_top - parting_height + 1.0, 1.0)
 
     if custom_positions:
         all_points = list(custom_positions)
@@ -189,29 +196,137 @@ def add_vents(pieces, wires, parting_height, block_top, count, diameter,
             all_points.extend(_spread(wire, count))
 
     is_rect = vent_shape == "Rectangular" and vent_width > 0 and vent_length > 0
+
     for point in all_points:
         base = App.Vector(point.x, point.y, parting_height)
-        if is_rect:
-            tool = Part.makeBox(
-                vent_width,
-                vent_length,
-                height,
-                App.Vector(
-                    base.x - vent_width / 2.0,
-                    base.y - vent_length / 2.0,
-                    base.z,
-                ),
-            )
+
+        if direction == VENT_DIR_NEAREST_WALL:
+            tool = _vent_to_wall(base, diameter, vent_shape, vent_width,
+                                 vent_length, block_box)
+        elif direction == VENT_DIR_DOWN:
+            tool = _vent_vertical(base, diameter, vent_shape, vent_width,
+                                  vent_length, parting_height, block_box,
+                                  going_up=False)
         else:
-            tool = Part.makeCylinder(
-                diameter / 2.0, height, base, App.Vector(0, 0, 1),
-            )
+            tool = _vent_vertical(base, diameter, vent_shape, vent_width,
+                                  vent_length, parting_height, block_box,
+                                  going_up=True)
+
+        if tool is None:
+            continue
+
+        target_side = "below" if direction == VENT_DIR_DOWN else "above"
         for piece in pieces:
-            if piece.side == "above":
+            if piece.side == target_side:
                 piece.cut(tool)
         positions.append(base)
         made += 1
     return made, positions
+
+
+def _vent_vertical(base, diameter, vent_shape, vent_width, vent_length,
+                   parting_height, block_box, going_up=True):
+    """Create a vertical vent tool going up or down from the parting plane."""
+    is_rect = vent_shape == "Rectangular" and vent_width > 0 and vent_length > 0
+
+    if going_up:
+        block_edge = block_box.ZMax if block_box else parting_height + 50.0
+        height = max(block_edge - parting_height + 1.0, 1.0)
+        origin = base
+        axis = App.Vector(0, 0, 1)
+    else:
+        block_edge = block_box.ZMin if block_box else parting_height - 50.0
+        height = max(parting_height - block_edge + 1.0, 1.0)
+        origin = App.Vector(base.x, base.y, parting_height - height)
+        axis = App.Vector(0, 0, 1)
+
+    if is_rect:
+        return Part.makeBox(
+            vent_width,
+            vent_length,
+            height,
+            App.Vector(
+                origin.x - vent_width / 2.0,
+                origin.y - vent_length / 2.0,
+                origin.z,
+            ),
+        )
+    else:
+        return Part.makeCylinder(diameter / 2.0, height, origin, axis)
+
+
+def _vent_to_wall(base, diameter, vent_shape, vent_width, vent_length,
+                  block_box):
+    """Create a horizontal vent tool from *base* toward the nearest block wall.
+
+    The vent runs at the parting height so it sits in the upper piece just
+    above the split line.  The cross section is centred on the vent point
+    and the channel extends from that point to the outside of the block.
+    """
+    if block_box is None:
+        return None
+
+    is_rect = vent_shape == "Rectangular" and vent_width > 0 and vent_length > 0
+
+    # Find distances to the four walls
+    dist_xmin = abs(base.x - block_box.XMin)
+    dist_xmax = abs(base.x - block_box.XMax)
+    dist_ymin = abs(base.y - block_box.YMin)
+    dist_ymax = abs(base.y - block_box.YMax)
+
+    dists = [
+        (dist_xmin, "xmin"),
+        (dist_xmax, "xmax"),
+        (dist_ymin, "ymin"),
+        (dist_ymax, "ymax"),
+    ]
+    dists.sort(key=lambda d: d[0])
+    nearest = dists[0][1]
+
+    # Channel length: from the vent point to 1 mm past the block wall
+    length = dists[0][0] + 1.0
+
+    # Determine axis direction and origin
+    if nearest == "xmin":
+        axis = App.Vector(-1, 0, 0)
+    elif nearest == "xmax":
+        axis = App.Vector(1, 0, 0)
+    elif nearest == "ymin":
+        axis = App.Vector(0, -1, 0)
+    else:
+        axis = App.Vector(0, 1, 0)
+
+    if is_rect:
+        # Build axis-aligned box.  The "width" of the rectangle is
+        # perpendicular to the travel direction, the "length" is along it.
+        if nearest in ("xmin", "xmax"):
+            # Channel runs along X; width spans Y, length along X
+            bx = min(base.x, base.x + axis.x * length)
+            return Part.makeBox(
+                length,
+                vent_width,
+                vent_length,
+                App.Vector(
+                    bx,
+                    base.y - vent_width / 2.0,
+                    base.z - vent_length / 2.0,
+                ),
+            )
+        else:
+            # Channel runs along Y; width spans X, length along Y
+            by = min(base.y, base.y + axis.y * length)
+            return Part.makeBox(
+                vent_width,
+                length,
+                vent_length,
+                App.Vector(
+                    base.x - vent_width / 2.0,
+                    by,
+                    base.z - vent_length / 2.0,
+                ),
+            )
+    else:
+        return Part.makeCylinder(diameter / 2.0, length, base, axis)
 
 
 def _spread(wire, count):

@@ -63,7 +63,9 @@ def parting_key_points(bound_box, parting_height, inset, style_is_cylinder):
     centre_x = bound_box.Center.x
     centre_y = bound_box.Center.y
     if style_is_cylinder:
-        radius = 0.5 * math.hypot(bound_box.XLength, bound_box.YLength) - inset
+        # The bounding box of a cylinder has XLength == YLength == diameter.
+        # Use the actual cylinder radius, not the bounding box diagonal.
+        radius = min(bound_box.XLength, bound_box.YLength) / 2.0 - inset
         radius = max(radius, 1.0)
         return [
             App.Vector(

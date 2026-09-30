@@ -108,7 +108,20 @@ def _common(shape, tool):
         return None
     if result is None or result.Volume < 1e-6:
         return None
-    return result.removeSplitter()
+    result = result.removeSplitter()
+    # When the parting plane slices through geometry that creates
+    # disconnected volumes on one side (e.g. a dome that produces a ring
+    # and a central island), fuse them so each piece is always one body.
+    solids = result.Solids
+    if len(solids) > 1:
+        try:
+            fused = solids[0].multiFuse(solids[1:])
+            fused = fused.removeSplitter()
+            if fused.Volume > 1e-6:
+                result = fused
+        except Exception:
+            pass
+    return result
 
 
 def secondary_axes(normal):
