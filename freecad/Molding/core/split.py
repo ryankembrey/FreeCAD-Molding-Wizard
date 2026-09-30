@@ -77,6 +77,7 @@ def split_block(block, parting_height, layout, secondary_angle_deg, bound_box):
         target_side = "above" if layout == LAYOUT_THREE_TOP else "below"
         pieces = _apply_secondary(pieces, target_side, secondary_angle_deg, centre, size)
 
+    _reassign_orphans(pieces)
     return pieces
 
 
@@ -99,6 +100,51 @@ def _apply_secondary(pieces, target_side, angle_deg, centre, size):
         result.append(Piece(piece.key + "_a", base + " half, side A", negative, piece.side, normal))
         result.append(Piece(piece.key + "_b", base + " half, side B", positive, piece.side, normal))
     return result
+
+
+def _reassign_orphans(pieces):
+    """Move disconnected solid islands to the opposing mold half.
+
+    After the parting plane split, small pockets of mold material can end
+    up on the wrong side.  For example, if a cup shaped part is split at
+    mid height, the mold material that fills the cup interior above the
+    parting line is geometrically *above* the cut, so it lands in the upper
+    piece.  But it is physically disconnected from the upper block shell
+    and should belong to the lower piece, which it touches at the parting
+    plane.
+
+    For every piece that contains more than one disjoint solid, we keep
+    the largest solid (the outer block shell) and fuse the smaller orphans
+    into the nearest opposing piece.
+    """
+    above = [p for p in pieces if p.side == "above"]
+    below = [p for p in pieces if p.side == "below"]
+    if not above or not below:
+        return
+
+    transfers = []
+    for piece in pieces:
+        solids = piece.shape.Solids
+        if len(solids) <= 1:
+            continue
+        by_vol = sorted(solids, key=lambda s: s.Volume, reverse=True)
+        main_body = by_vol[0]
+        orphans = by_vol[1:]
+
+        targets = below if piece.side == "above" else above
+        piece.shape = main_body
+        for orphan in orphans:
+            best = min(
+                targets,
+                key=lambda t: (
+                    App.Vector(t.shape.BoundBox.Center)
+                    - App.Vector(orphan.BoundBox.Center)
+                ).Length,
+            )
+            transfers.append((orphan, best))
+
+    for orphan, target in transfers:
+        target.fuse(orphan)
 
 
 def _common(shape, tool):

@@ -107,7 +107,12 @@ def add_injection_port(
         face = section_face(wires)
         if face is None:
             return None
-        point = face.CenterOfMass
+        try:
+            point = face.CenterOfMass
+        except AttributeError:
+            # Compound from fused faces has no CenterOfMass; fall back
+            # to the bounding box centre.
+            point = face.BoundBox.Center
         centre = App.Vector(point.x, point.y, parting_height)
 
         # Make sure the point is inside the cavity

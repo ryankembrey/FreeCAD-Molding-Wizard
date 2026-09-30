@@ -180,5 +180,8 @@ def centroid_xy(wires):
     face = section_face(wires)
     if face is None:
         return App.Vector(0, 0, 0)
-    centre = face.CenterOfMass
+    try:
+        centre = face.CenterOfMass
+    except AttributeError:
+        centre = face.BoundBox.Center
     return App.Vector(centre.x, centre.y, 0.0)

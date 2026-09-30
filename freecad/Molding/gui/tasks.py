@@ -479,6 +479,18 @@ class MoldWizardPanel(object):
         self.sb_secondary_angle.setEnabled(False)
         g.addWidget(self.sb_secondary_angle, 2, 1)
 
+        self.pb_parting_pick = QtWidgets.QPushButton("Pick Parting Geometry")
+        self.pb_parting_pick.setCheckable(True)
+        self.pb_parting_pick.setMinimumHeight(28)
+        self.pb_parting_pick.setStyleSheet(PICK_BUTTON_STYLE)
+        self.pb_parting_pick.setToolTip(
+            "Click a vertex, edge, or face on the part to place the parting "
+            "plane at that height along the pull direction. The plane passes "
+            "through the centroid of the picked geometry."
+        )
+        self.pb_parting_pick.clicked.connect(self._on_pick_parting)
+        g.addWidget(self.pb_parting_pick, 3, 0, 1, 2)
+
         root.addWidget(box)
         self._step_widgets.append(box)
 
@@ -1199,6 +1211,9 @@ class MoldWizardPanel(object):
         elif self.picking_mode == "injection":
             self._apply_custom_position("injection")
             self._end_pick()
+        elif self.picking_mode == "parting":
+            self._apply_parting_from_pick()
+            self._end_pick()
         elif self.picking_mode == "vents":
             self._apply_custom_position("vents")
             # Don't end pick for vents; user can keep clicking multiple spots
@@ -1244,6 +1259,25 @@ class MoldWizardPanel(object):
                     return
         except Exception:
             pass
+
+    def _apply_parting_from_pick(self):
+        """Set the parting offset from the picked vertex, edge, or face.
+
+        Uses the existing ``pick.height_from_selection`` which transforms the
+        picked geometry into the local frame and returns the height offset
+        relative to the bottom of the part.
+        """
+        if self.target_object is None:
+            self._show_status("warning", "Select a solid body first.")
+            return
+        offset = pick.height_from_selection(
+            self.pull_dir, self.target_object.Shape
+        )
+        if offset is not None:
+            self.sb_parting.setValue(offset)
+            self.pb_parting_pick.setChecked(False)
+        else:
+            self._show_status("warning", "Could not read height from selection.")
 
     def _run_slow_update(self):
         """Run parting suggestion + direction indicator with a wait cursor.
@@ -1305,17 +1339,24 @@ class MoldWizardPanel(object):
         else:
             self._end_pick()
 
+    def _on_pick_parting(self):
+        if self.pb_parting_pick.isChecked():
+            self._start_pick("parting")
+        else:
+            self._end_pick()
+
     def _start_pick(self, mode):
         self.picking_mode = mode
         # uncheck other pick buttons
-        for btn in (self.pb_object, self.pb_pull, self.pb_inj_place, self.pb_vent_place):
-            attr_name = {
-                self.pb_object: "object",
-                self.pb_pull: "pull",
-                self.pb_inj_place: "injection",
-                self.pb_vent_place: "vents",
-            }.get(btn, "")
-            if attr_name != mode:
+        buttons = {
+            self.pb_object: "object",
+            self.pb_pull: "pull",
+            self.pb_inj_place: "injection",
+            self.pb_vent_place: "vents",
+            self.pb_parting_pick: "parting",
+        }
+        for btn, btn_mode in buttons.items():
+            if btn_mode != mode:
                 btn.setChecked(False)
         if not self.cursor_overridden:
             QtWidgets.QApplication.setOverrideCursor(
@@ -1329,6 +1370,7 @@ class MoldWizardPanel(object):
         self.pb_pull.setChecked(False)
         self.pb_inj_place.setChecked(False)
         self.pb_vent_place.setChecked(False)
+        self.pb_parting_pick.setChecked(False)
         if self.cursor_overridden:
             QtWidgets.QApplication.restoreOverrideCursor()
             self.cursor_overridden = False

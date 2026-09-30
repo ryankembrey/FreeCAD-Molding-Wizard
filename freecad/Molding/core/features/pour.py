@@ -128,7 +128,10 @@ def add_pour_port(pieces, wires, parting_height, block_top, diameter, funnel_d, 
     face = section_face(wires)
     if face is None:
         return False
-    point = face.CenterOfMass
+    try:
+        point = face.CenterOfMass
+    except AttributeError:
+        point = face.BoundBox.Center
     centre = App.Vector(point.x, point.y, parting_height)
     if not face.isInside(App.Vector(point.x, point.y, parting_height), 1e-3, True):
         # A crescent shaped section can put the centroid outside the material,

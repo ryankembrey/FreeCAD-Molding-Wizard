@@ -96,6 +96,8 @@ class MoldJob(object):
         """Filter property changes so view/export/results edits skip rebuild."""
         if prop in self._SKIP_REBUILD:
             obj.purgeTouched()
+            if prop == "Exploded":
+                _update_explode(obj)
 
     def execute(self, obj):
         if getattr(self, "building", False):
@@ -113,6 +115,7 @@ def rebuild(obj):
     proxy.building = True
     try:
         result = buildmod.build(obj)
+        proxy._last_result = result
         _sync_children(obj, result)
         obj.CavityVolume = round(result.cavity_volume_ml, 3)
         obj.SuggestedPour = round(result.suggested_pour_ml, 3)
@@ -174,9 +177,17 @@ def _side_of(result, key):
 
 
 def _explode(obj, children, result):
-    """Slide the pieces apart for viewing, without touching the geometry."""
+    """Slide the pieces apart for viewing, without touching the geometry.
+
+    The pull axis is derived from the build frame rather than from
+    ``obj.PullDirection`` so that the explode direction is guaranteed to
+    match the coordinate system the geometry was built in.
+    """
     distance = float(obj.Exploded)
-    axis = App.Vector(obj.PullDirection)
+    if result.frame is not None:
+        axis = result.frame.Rotation.multVec(App.Vector(0, 0, 1))
+    else:
+        axis = App.Vector(obj.PullDirection)
     if axis.Length < 1e-9:
         axis = App.Vector(0, 0, 1)
     axis.normalize()
@@ -191,6 +202,27 @@ def _explode(obj, children, result):
                     sideways = result.frame.Rotation.multVec(sideways)
                 offset = offset + sideways * (distance * 0.8 * sign)
         child.Placement = App.Placement(offset, App.Rotation())
+
+
+def _update_explode(obj):
+    """Re-run the explode without a full geometry rebuild.
+
+    Called from ``onChanged`` when only the Exploded slider moves.
+    Falls back silently when there is no cached result yet.
+    """
+    proxy = obj.Proxy
+    result = getattr(proxy, "_last_result", None)
+    if result is None:
+        return
+    children = []
+    for piece in result.pieces:
+        for child in obj.Group:
+            if getattr(child, "PieceKey", None) == piece.key:
+                children.append(child)
+                break
+        else:
+            return  # child list doesn't match, need a full rebuild first
+    _explode(obj, children, result)
 
 
 def add_properties(obj):
