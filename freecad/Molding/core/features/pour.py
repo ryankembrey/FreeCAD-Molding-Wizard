@@ -226,19 +226,26 @@ def add_vents(pieces, wires, parting_height, block_top, count, diameter,
 
 def _vent_vertical(base, diameter, vent_shape, vent_width, vent_length,
                    parting_height, block_box, going_up=True):
-    """Create a vertical vent tool going up or down from the parting plane."""
+    """Create a vertical vent tool going up or down from the parting plane.
+
+    The tool overshoots the parting surface by 1 mm so the boolean cut
+    does not have to deal with coplanar faces (OCC fails silently when the
+    tool end face sits exactly on a piece boundary).
+    """
     is_rect = vent_shape == "Rectangular" and vent_width > 0 and vent_length > 0
 
     if going_up:
         block_edge = block_box.ZMax if block_box else parting_height + 50.0
         height = max(block_edge - parting_height + 1.0, 1.0)
-        origin = base
-        axis = App.Vector(0, 0, 1)
+        origin_z = parting_height
     else:
         block_edge = block_box.ZMin if block_box else parting_height - 50.0
-        height = max(parting_height - block_edge + 1.0, 1.0)
-        origin = App.Vector(base.x, base.y, parting_height - height)
-        axis = App.Vector(0, 0, 1)
+        # Start 1 mm below the block floor and extend 1 mm past the parting
+        # surface, so the tool clearly pokes through both faces.
+        origin_z = block_edge - 1.0
+        height = max(parting_height - block_edge + 2.0, 1.0)
+
+    origin = App.Vector(base.x, base.y, origin_z)
 
     if is_rect:
         return Part.makeBox(
@@ -252,21 +259,31 @@ def _vent_vertical(base, diameter, vent_shape, vent_width, vent_length,
             ),
         )
     else:
-        return Part.makeCylinder(diameter / 2.0, height, origin, axis)
+        return Part.makeCylinder(diameter / 2.0, height, origin, App.Vector(0, 0, 1))
 
 
 def _vent_to_wall(base, diameter, vent_shape, vent_width, vent_length,
                   block_box):
     """Create a horizontal vent tool from *base* toward the nearest block wall.
 
-    The vent runs at the parting height so it sits in the upper piece just
-    above the split line.  The cross section is centred on the vent point
-    and the channel extends from that point to the outside of the block.
+    The vent sits just above the parting surface so the full cross section
+    is inside the upper piece.  This avoids the tangent / coplanar case
+    where OCC's boolean engine silently produces no cut.
     """
     if block_box is None:
         return None
 
     is_rect = vent_shape == "Rectangular" and vent_width > 0 and vent_length > 0
+
+    # Lift the channel so the full cross section sits inside the upper
+    # piece.  For a cylinder the bottom of the bore touches the parting
+    # surface; for a rectangle the bottom face does.
+    radius = diameter / 2.0
+    if is_rect:
+        lift = vent_length / 2.0
+    else:
+        lift = radius
+    channel_z = base.z + lift
 
     # Find distances to the four walls
     dist_xmin = abs(base.x - block_box.XMin)
@@ -286,7 +303,7 @@ def _vent_to_wall(base, diameter, vent_shape, vent_width, vent_length,
     # Channel length: from the vent point to 1 mm past the block wall
     length = dists[0][0] + 1.0
 
-    # Determine axis direction and origin
+    # Determine axis direction
     if nearest == "xmin":
         axis = App.Vector(-1, 0, 0)
     elif nearest == "xmax":
@@ -296,11 +313,12 @@ def _vent_to_wall(base, diameter, vent_shape, vent_width, vent_length,
     else:
         axis = App.Vector(0, 1, 0)
 
+    channel_base = App.Vector(base.x, base.y, channel_z)
+
     if is_rect:
         # Build axis-aligned box.  The "width" of the rectangle is
         # perpendicular to the travel direction, the "length" is along it.
         if nearest in ("xmin", "xmax"):
-            # Channel runs along X; width spans Y, length along X
             bx = min(base.x, base.x + axis.x * length)
             return Part.makeBox(
                 length,
@@ -309,11 +327,10 @@ def _vent_to_wall(base, diameter, vent_shape, vent_width, vent_length,
                 App.Vector(
                     bx,
                     base.y - vent_width / 2.0,
-                    base.z - vent_length / 2.0,
+                    channel_z - vent_length / 2.0,
                 ),
             )
         else:
-            # Channel runs along Y; width spans X, length along Y
             by = min(base.y, base.y + axis.y * length)
             return Part.makeBox(
                 vent_width,
@@ -322,11 +339,11 @@ def _vent_to_wall(base, diameter, vent_shape, vent_width, vent_length,
                 App.Vector(
                     base.x - vent_width / 2.0,
                     by,
-                    base.z - vent_length / 2.0,
+                    channel_z - vent_length / 2.0,
                 ),
             )
     else:
-        return Part.makeCylinder(diameter / 2.0, length, base, axis)
+        return Part.makeCylinder(radius, length, channel_base, axis)
 
 
 def _spread(wire, count):
