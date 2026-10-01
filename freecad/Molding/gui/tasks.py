@@ -477,15 +477,12 @@ class MoldWizardPanel(object):
         self.progress = QtWidgets.QProgressBar()
         self.progress.hide()
 
-        sep_wrap = QtWidgets.QWidget()
-        sep_lay = QtWidgets.QVBoxLayout(sep_wrap)
-        sep_lay.setContentsMargins(6, 4, 6, 0)
-        sep_line = QtWidgets.QFrame()
-        sep_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        sep_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
-        sep_lay.addWidget(sep_line)
+        sep = QtWidgets.QWidget()
+        sep.setFixedHeight(1)
+        sep.setStyleSheet("background-color: palette(mid);")
+        sep.setContentsMargins(6, 0, 6, 0)
 
-        outer.addWidget(sep_wrap)
+        outer.addWidget(sep)
         outer.addWidget(btn_area)
         outer.addWidget(self.progress)
 

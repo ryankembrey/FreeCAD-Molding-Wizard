@@ -134,9 +134,13 @@ def add_injection_port(
     if cavity_z is None:
         cavity_z = parting_height
 
-    # Start the channel slightly below the cavity ceiling so the bore
-    # fully breaks into the void, and run it up to the adapter seat.
-    channel_bottom = cavity_z - 0.5
+    # Start the channel below the cavity ceiling so the bore fully
+    # breaks into the void.  On sharply curved tips (e.g. a condom
+    # shape) the cavity surface at the cylinder edges is higher than
+    # at the centre where the ray-cast landed, so the overshoot must
+    # cover at least the channel radius to guarantee a clean cut.
+    overshoot = max(1.0, channel_r)
+    channel_bottom = cavity_z - overshoot
     channel_height = adapter_seat_z - channel_bottom + 0.5
     if channel_height <= 0:
         channel_height = block_top - channel_bottom + 1.0
