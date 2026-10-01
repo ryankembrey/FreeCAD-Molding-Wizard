@@ -128,25 +128,48 @@ def build(job):
             "height": float(job.KeyHeight),
             "clearance": float(job.KeyClearance),
         }
-        margin = float(job.GutterWidth) + float(job.GutterGap) if job.Gutter else 1.0
         placed = 0
         key_positions = []
-        for point in keys.parting_key_points(
-            block_box, parting_height, float(job.KeyInset), style_is_cylinder
-        ):
-            if _too_close(wires, point, float(job.KeyDiameter) / 2.0 + margin):
-                continue
-            if keys.add_key_pair(pieces, point, App.Vector(0, 0, 1), params, part):
-                key_positions.append(point)
-                placed += 1
-        if job.Layout != LAYOUT_TWO:
-            for piece in list(pieces):
-                if piece.split_normal is None:
+
+        custom_key_pos = None
+        if getattr(job, "UseCustomKeyPositions", False):
+            try:
+                raw = list(job.KeyPositions)
+                if raw:
+                    custom_key_pos = [
+                        frame.inverse().multVec(App.Vector(v))
+                        for v in raw
+                    ]
+            except Exception:
+                pass
+
+        if custom_key_pos is not None:
+            # User-picked positions: place keys at each point
+            for point in custom_key_pos:
+                point_at_parting = App.Vector(point.x, point.y, parting_height)
+                if keys.add_key_pair(pieces, point_at_parting, App.Vector(0, 0, 1), params, part):
+                    key_positions.append(point_at_parting)
+                    placed += 1
+        else:
+            # Automatic placement at block corners
+            margin = float(job.GutterWidth) + float(job.GutterGap) if job.Gutter else 1.0
+            for point in keys.parting_key_points(
+                block_box, parting_height, float(job.KeyInset), style_is_cylinder
+            ):
+                if _too_close(wires, point, float(job.KeyDiameter) / 2.0 + margin):
                     continue
-                for point in keys.secondary_key_points(piece, float(job.KeyInset)):
-                    if keys.add_key_pair(pieces, point, piece.split_normal, params, part):
-                        key_positions.append(point)
-                        placed += 1
+                if keys.add_key_pair(pieces, point, App.Vector(0, 0, 1), params, part):
+                    key_positions.append(point)
+                    placed += 1
+            if job.Layout != LAYOUT_TWO:
+                for piece in list(pieces):
+                    if piece.split_normal is None:
+                        continue
+                    for point in keys.secondary_key_points(piece, float(job.KeyInset)):
+                        if keys.add_key_pair(pieces, point, piece.split_normal, params, part):
+                            key_positions.append(point)
+                            placed += 1
+
         result.notes.append("Registration keys placed: %d" % placed)
         if placed == 0:
             result.warnings.append(
@@ -254,26 +277,46 @@ def build(job):
         bolt_spec = fasteners.BOLTS.get(job.BoltSize, {})
         bolt_hole_r = (bolt_spec.get("clearance", 4.5) + float(job.BoltClearance)) / 2.0
 
-        # Generate a dense ring of candidates and filter by cavity clearance
-        candidates = fasteners.bolt_candidates(
-            block_box, float(job.BoltInset), style_is_cylinder,
-            parting_height, density=max(requested * 6, 24),
-        )
-        candidates = [
-            p for p in candidates
-            if not _bolt_hits_part(part, p, bolt_hole_r, block_box)
-        ]
+        custom_bolt_pos = None
+        if getattr(job, "UseCustomBoltPositions", False):
+            try:
+                raw = list(job.BoltPositions)
+                if raw:
+                    custom_bolt_pos = [
+                        frame.inverse().multVec(App.Vector(v))
+                        for v in raw
+                    ]
+            except Exception:
+                pass
 
-        # Collect existing feature positions (XY only) for avoidance
-        feature_xy = [
-            App.Vector(fp["point"].x, fp["point"].y, parting_height)
-            for fp in result.feature_points
-        ]
-        min_feat_dist = bolt_hole_r * 2.0 + 2.0  # bolt radius + structural margin
+        if custom_bolt_pos is not None:
+            # User-picked positions: use directly (XY at parting height)
+            points = [
+                App.Vector(p.x, p.y, parting_height)
+                for p in custom_bolt_pos
+            ]
+        else:
+            # Automatic placement: generate candidates and select evenly
+            candidates = fasteners.bolt_candidates(
+                block_box, float(job.BoltInset), style_is_cylinder,
+                parting_height, density=max(requested * 6, 24),
+            )
+            candidates = [
+                p for p in candidates
+                if not _bolt_hits_part(part, p, bolt_hole_r, block_box)
+            ]
 
-        points = fasteners.select_bolt_positions(
-            candidates, requested, feature_xy, min_feat_dist,
-        )
+            # Collect existing feature positions (XY only) for avoidance
+            feature_xy = [
+                App.Vector(fp["point"].x, fp["point"].y, parting_height)
+                for fp in result.feature_points
+            ]
+            min_feat_dist = bolt_hole_r * 2.0 + 2.0  # bolt radius + structural margin
+
+            points = fasteners.select_bolt_positions(
+                candidates, requested, feature_xy, min_feat_dist,
+            )
+
         _guard(
             result,
             "bolt holes",
@@ -288,7 +331,7 @@ def build(job):
             bool(job.NutTrap),
         )
         placed = len(points)
-        if placed < requested:
+        if custom_bolt_pos is None and placed < requested:
             result.warnings.append(
                 "Only %d of %d bolt(s) placed; the rest were too close to "
                 "the cavity or other features. Increase the wall thickness "

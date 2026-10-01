@@ -52,10 +52,6 @@ PICK_BUTTON_STYLE = """
 QPushButton:checked { border: 2px solid palette(highlight); font-weight: bold; }
 """
 
-_WARNING_ICON = "⚠"   # ⚠
-_SUCCESS_ICON = "✔"   # ✔
-_INFO_ICON    = "ℹ"   # ℹ
-
 
 # =============================================================================
 # Event filters
@@ -82,6 +78,154 @@ class _SpinBoxEnterFilter(QtCore.QObject):
                 obj.clearFocus()
                 return True
         return False
+
+
+# =============================================================================
+# Preset dialog
+# =============================================================================
+
+_PRESET_ACTIVE_ICON = "✓"   # checkmark
+_NO_PRESET_LABEL = "(No preset)"
+
+
+class _PresetDialog(QtWidgets.QDialog):
+    """Single popup for loading, saving, or deleting presets."""
+
+    def __init__(self, preset_names, active_preset, save_fn, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Presets")
+        self.setMinimumWidth(280)
+
+        self.chosen_action = None  # "load" or None (save/delete handled inline)
+        self.chosen_name = None
+        self._active_preset = active_preset
+        self._save_fn = save_fn     # callback(name) to persist current settings
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setSpacing(8)
+
+        # Preset list
+        self.preset_list = QtWidgets.QListWidget()
+        self._populate_list(preset_names, active_preset)
+        self.preset_list.itemDoubleClicked.connect(self._on_load)
+        layout.addWidget(self.preset_list, 1)
+
+        # Save row: text field + Save button
+        save_row = QtWidgets.QHBoxLayout()
+        save_row.setSpacing(4)
+        self.le_save_name = QtWidgets.QLineEdit()
+        self.le_save_name.setPlaceholderText("New preset name")
+        self.pb_save = QtWidgets.QPushButton("Save")
+        self.pb_save.setToolTip("Save current settings as a new preset.")
+        self.pb_save.clicked.connect(self._on_save)
+        self.le_save_name.returnPressed.connect(self._on_save)
+        save_row.addWidget(self.le_save_name, 1)
+        save_row.addWidget(self.pb_save)
+        layout.addLayout(save_row)
+
+        # Load / Delete buttons
+        btn_row = QtWidgets.QHBoxLayout()
+        btn_row.setSpacing(4)
+        self.pb_load = QtWidgets.QPushButton("Load")
+        self.pb_load.setToolTip("Apply the selected preset.")
+        self.pb_load.clicked.connect(self._on_load)
+        self.pb_delete = QtWidgets.QPushButton("Delete")
+        self.pb_delete.setToolTip("Delete the selected preset.")
+        self.pb_delete.clicked.connect(self._on_delete)
+        btn_row.addWidget(self.pb_load, 1)
+        btn_row.addWidget(self.pb_delete, 1)
+        layout.addLayout(btn_row)
+
+        self._update_buttons()
+        self.preset_list.currentRowChanged.connect(
+            lambda _: self._update_buttons()
+        )
+
+    def _populate_list(self, preset_names, active_preset):
+        self.preset_list.clear()
+        # "No preset" sentinel at the top
+        self.preset_list.addItem(_NO_PRESET_LABEL)
+        for name in preset_names:
+            label = "%s  %s" % (_PRESET_ACTIVE_ICON, name) if name == active_preset else name
+            self.preset_list.addItem(label)
+        # Select the active preset row, or "No preset" if none active
+        if active_preset and active_preset in preset_names:
+            row = preset_names.index(active_preset) + 1  # +1 for sentinel
+            self.preset_list.setCurrentRow(row)
+        else:
+            self.preset_list.setCurrentRow(0)
+
+    def _selected_name(self):
+        """Return the real preset name from the current row, or None for sentinel."""
+        item = self.preset_list.currentItem()
+        if item is None:
+            return None
+        text = item.text()
+        if text == _NO_PRESET_LABEL:
+            return None
+        # Strip the active icon prefix if present
+        if text.startswith(_PRESET_ACTIVE_ICON):
+            text = text[len(_PRESET_ACTIVE_ICON):].lstrip()
+        return text
+
+    def _update_buttons(self):
+        name = self._selected_name()
+        self.pb_load.setEnabled(True)   # always enabled (can load "No preset")
+        self.pb_delete.setEnabled(name is not None)
+
+    def _on_load(self):
+        name = self._selected_name()
+        # name is None when "(No preset)" is selected, which clears the active
+        self.chosen_action = "load"
+        self.chosen_name = name
+        self.accept()
+
+    def _on_save(self):
+        from ..app import presets
+
+        name = self.le_save_name.text().strip()
+        if not name:
+            return
+
+        existing = presets.list_presets()
+        if name in existing:
+            answer = QtWidgets.QMessageBox.question(
+                self,
+                "Overwrite preset?",
+                'A preset named "%s" already exists. Overwrite it?' % name,
+                QtWidgets.QMessageBox.StandardButton.Yes
+                | QtWidgets.QMessageBox.StandardButton.No,
+            )
+            if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+
+        self._save_fn(name)
+        self._active_preset = name
+        self.le_save_name.clear()
+        # Refresh the list in place
+        self._populate_list(presets.list_presets(), name)
+
+    def _on_delete(self):
+        from ..app import presets
+
+        name = self._selected_name()
+        if name is None:
+            return
+        answer = QtWidgets.QMessageBox.question(
+            self,
+            "Delete preset?",
+            'Permanently delete preset "%s"?' % name,
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No,
+        )
+        if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        presets.delete_preset(name)
+        App.Console.PrintMessage('[Molding] Preset "%s" deleted.\n' % name)
+        # If the deleted preset was active, clear it
+        if self._active_preset == name:
+            self._active_preset = None
+        self._populate_list(presets.list_presets(), self._active_preset)
 
 
 # =============================================================================
@@ -123,6 +267,11 @@ class MoldWizardPanel(object):
         # Custom picked positions
         self._custom_injection_pos = None   # App.Vector or None
         self._custom_vent_positions = []    # list of App.Vector
+        self._custom_key_positions = []     # list of App.Vector
+        self._custom_bolt_positions = []    # list of App.Vector
+
+        # Preset tracking
+        self._active_preset = None
 
         # Last build result for feature label positions
         self._last_result = None
@@ -131,7 +280,6 @@ class MoldWizardPanel(object):
         # without pivy during unit tests).
         self._direction_indicator = None
         self._feature_labels = None
-
         # Wizard step tracking
         self._wizard_mode = False
         self._wizard_step = 0
@@ -300,51 +448,49 @@ class MoldWizardPanel(object):
         outer.setSpacing(0)
         outer.addWidget(scroll_area, 1)
 
-        # Generate / Clear buttons (always visible, below the scroll)
+        # Action buttons: Generate | Clear | Presets
         btn_area = QtWidgets.QWidget()
-        btn_layout = QtWidgets.QVBoxLayout(btn_area)
-        btn_layout.setContentsMargins(6, 6, 6, 6)
-        btn_layout.setSpacing(6)
+        btn_layout = QtWidgets.QHBoxLayout(btn_area)
+        btn_layout.setContentsMargins(6, 4, 6, 4)
+        btn_layout.setSpacing(4)
 
-        row = QtWidgets.QHBoxLayout()
-        self.pb_generate = QtWidgets.QPushButton("Generate Mold")
-        self.pb_generate.setMinimumHeight(32)
+        self.pb_generate = QtWidgets.QPushButton("Generate")
         self.pb_generate.setToolTip(
             "Build the mold bodies from the current settings. "
             "Re-run any time to update after changing parameters."
         )
         self.pb_generate.clicked.connect(self._on_generate)
         self.pb_clear = QtWidgets.QPushButton("Clear")
-        self.pb_clear.setMinimumHeight(32)
         self.pb_clear.setEnabled(False)
         self.pb_clear.setToolTip("Remove the generated mold from the document.")
         self.pb_clear.clicked.connect(self._on_clear)
-        row.addWidget(self.pb_generate, 1)
-        row.addWidget(self.pb_clear, 1)
-        btn_layout.addLayout(row)
+        self.pb_presets = QtWidgets.QPushButton("Presets")
+        self.pb_presets.setToolTip(
+            "Save, load, or delete parameter presets."
+        )
+        self.pb_presets.clicked.connect(self._on_presets)
+
+        btn_layout.addWidget(self.pb_generate, 1)
+        btn_layout.addWidget(self.pb_clear, 1)
+        btn_layout.addWidget(self.pb_presets, 1)
 
         self.progress = QtWidgets.QProgressBar()
         self.progress.hide()
-        btn_layout.addWidget(self.progress)
 
+        sep_wrap = QtWidgets.QWidget()
+        sep_lay = QtWidgets.QVBoxLayout(sep_wrap)
+        sep_lay.setContentsMargins(6, 4, 6, 0)
+        sep_line = QtWidgets.QFrame()
+        sep_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+        sep_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
+        sep_lay.addWidget(sep_line)
+
+        outer.addWidget(sep_wrap)
         outer.addWidget(btn_area)
+        outer.addWidget(self.progress)
 
-        # -- Panel 3: Diagnostics (rich text browser for build results) --
-        self.diag_panel = QtWidgets.QWidget()
-        self.diag_panel.setWindowTitle("Diagnostics")
-        diag_layout = QtWidgets.QVBoxLayout(self.diag_panel)
-        diag_layout.setContentsMargins(0, 0, 0, 0)
-        diag_layout.setSpacing(0)
-
-        self.diag_browser = QtWidgets.QTextBrowser()
-        self.diag_browser.setOpenExternalLinks(False)
-        self.diag_browser.setMinimumHeight(60)
-        self.diag_browser.setMaximumHeight(200)
-        self.diag_browser.setPlaceholderText("Build results will appear here.")
-        diag_layout.addWidget(self.diag_browser)
-
-        # Expose all three panels as the form list
-        self.form = [self.viewport_panel, self.wizard_panel, self.diag_panel]
+        # Expose panels (no diagnostics panel; output goes to Report View)
+        self.form = [self.viewport_panel, self.wizard_panel]
 
     # --- Object selection ---
 
@@ -460,6 +606,7 @@ class MoldWizardPanel(object):
             "along the pull direction. The auto-suggest places it at the widest "
             "cross section."
         )
+        # (parting offset is applied at build time; no live indicator to update)
         g.addWidget(QtWidgets.QLabel("Parting offset"), 1, 0)
         g.addWidget(self.sb_parting, 1, 1)
 
@@ -918,8 +1065,47 @@ class MoldWizardPanel(object):
         g.addWidget(self.sb_key_clearance, 2, 1)
         g.addWidget(QtWidgets.QLabel("Inset"), 3, 0)
         g.addWidget(self.sb_key_inset, 3, 1)
+
+        # Custom key placement
+        self.pb_key_place = QtWidgets.QPushButton("Pick Locations")
+        self.pb_key_place.setCheckable(True)
+        self.pb_key_place.setMinimumHeight(28)
+        self.pb_key_place.setStyleSheet(PICK_BUTTON_STYLE)
+        self.pb_key_place.setToolTip(
+            "Click points on the mold block parting surface to place "
+            "registration keys at specific locations. Leave unset for "
+            "automatic corner placement."
+        )
+        self.pb_key_place.clicked.connect(self._on_pick_keys)
+        self.le_key_pos = QtWidgets.QLineEdit()
+        self.le_key_pos.setReadOnly(True)
+        self.le_key_pos.setMinimumHeight(28)
+        self.le_key_pos.setPlaceholderText("Auto (corners)")
+
+        self.pb_key_clear = QtWidgets.QPushButton("Clear")
+        self.pb_key_clear.setMinimumHeight(28)
+        self.pb_key_clear.setToolTip("Reset to automatic key placement.")
+        self.pb_key_clear.clicked.connect(self._on_clear_key_positions)
+        self.pb_key_clear.hide()
+
+        key_pick_row = QtWidgets.QHBoxLayout()
+        key_pick_row.setContentsMargins(0, 0, 0, 0)
+        key_pick_row.setSpacing(4)
+        key_pick_row.addWidget(self.le_key_pos, 1)
+        key_pick_row.addWidget(self.pb_key_clear, 0)
+        key_pick_widget = QtWidgets.QWidget()
+        key_pick_widget.setLayout(key_pick_row)
+
+        g.addWidget(self.pb_key_place, 4, 0)
+        g.addWidget(key_pick_widget, 4, 1)
+
         root.addWidget(box)
         self._step_widgets.append(box)
+
+    def _on_clear_key_positions(self):
+        self._custom_key_positions = []
+        self.le_key_pos.clear()
+        self.pb_key_clear.hide()
 
     # --- Hardware (bolts) ---
 
@@ -995,10 +1181,47 @@ class MoldWizardPanel(object):
         hw_row.addWidget(self.chk_nut_trap, 1)
         hw_wrap = QtWidgets.QWidget()
         hw_wrap.setLayout(hw_row)
-        g.addWidget(hw_wrap, 3, 0, 1, 2)
+        g.addWidget(hw_wrap, 4, 0, 1, 2)
+
+        # Custom bolt placement
+        self.pb_bolt_place = QtWidgets.QPushButton("Pick Locations")
+        self.pb_bolt_place.setCheckable(True)
+        self.pb_bolt_place.setMinimumHeight(28)
+        self.pb_bolt_place.setStyleSheet(PICK_BUTTON_STYLE)
+        self.pb_bolt_place.setToolTip(
+            "Click points on the mold block to place bolt holes at "
+            "specific locations. Leave unset for automatic even spacing."
+        )
+        self.pb_bolt_place.clicked.connect(self._on_pick_bolts)
+        self.le_bolt_pos = QtWidgets.QLineEdit()
+        self.le_bolt_pos.setReadOnly(True)
+        self.le_bolt_pos.setMinimumHeight(28)
+        self.le_bolt_pos.setPlaceholderText("Auto (distributed)")
+
+        self.pb_bolt_clear = QtWidgets.QPushButton("Clear")
+        self.pb_bolt_clear.setMinimumHeight(28)
+        self.pb_bolt_clear.setToolTip("Reset to automatic bolt placement.")
+        self.pb_bolt_clear.clicked.connect(self._on_clear_bolt_positions)
+        self.pb_bolt_clear.hide()
+
+        bolt_pick_row = QtWidgets.QHBoxLayout()
+        bolt_pick_row.setContentsMargins(0, 0, 0, 0)
+        bolt_pick_row.setSpacing(4)
+        bolt_pick_row.addWidget(self.le_bolt_pos, 1)
+        bolt_pick_row.addWidget(self.pb_bolt_clear, 0)
+        bolt_pick_widget = QtWidgets.QWidget()
+        bolt_pick_widget.setLayout(bolt_pick_row)
+
+        g.addWidget(self.pb_bolt_place, 5, 0)
+        g.addWidget(bolt_pick_widget, 5, 1)
 
         root.addWidget(box)
         self._step_widgets.append(box)
+
+    def _on_clear_bolt_positions(self):
+        self._custom_bolt_positions = []
+        self.le_bolt_pos.clear()
+        self.pb_bolt_clear.hide()
 
     # --- Pry slots ---
 
@@ -1218,6 +1441,12 @@ class MoldWizardPanel(object):
             self._apply_custom_position("vents")
             # Don't end pick for vents; user can keep clicking multiple spots
             # They press Escape or uncheck to finish.
+        elif self.picking_mode == "keys":
+            self._apply_custom_position("keys")
+            # Multi-click: keep picking until Escape or uncheck.
+        elif self.picking_mode == "bolts":
+            self._apply_custom_position("bolts")
+            # Multi-click: keep picking until Escape or uncheck.
 
     def _apply_object(self, obj):
         self.target_object = obj
@@ -1256,6 +1485,20 @@ class MoldWizardPanel(object):
                             "%d point%s picked" % (count, "s" if count != 1 else "")
                         )
                         self.pb_vent_clear.show()
+                    elif mode == "keys":
+                        self._custom_key_positions.append(pt)
+                        count = len(self._custom_key_positions)
+                        self.le_key_pos.setText(
+                            "%d point%s picked" % (count, "s" if count != 1 else "")
+                        )
+                        self.pb_key_clear.show()
+                    elif mode == "bolts":
+                        self._custom_bolt_positions.append(pt)
+                        count = len(self._custom_bolt_positions)
+                        self.le_bolt_pos.setText(
+                            "%d point%s picked" % (count, "s" if count != 1 else "")
+                        )
+                        self.pb_bolt_clear.show()
                     return
         except Exception:
             pass
@@ -1296,7 +1539,6 @@ class MoldWizardPanel(object):
             self._update_direction_indicator()
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()
-            self.diag_browser.clear()
 
     def _suggest_parting(self):
         """Drop the parting plane on the widest section of the current part."""
@@ -1339,6 +1581,18 @@ class MoldWizardPanel(object):
         else:
             self._end_pick()
 
+    def _on_pick_keys(self):
+        if self.pb_key_place.isChecked():
+            self._start_pick("keys")
+        else:
+            self._end_pick()
+
+    def _on_pick_bolts(self):
+        if self.pb_bolt_place.isChecked():
+            self._start_pick("bolts")
+        else:
+            self._end_pick()
+
     def _on_pick_parting(self):
         if self.pb_parting_pick.isChecked():
             self._start_pick("parting")
@@ -1353,6 +1607,8 @@ class MoldWizardPanel(object):
             self.pb_pull: "pull",
             self.pb_inj_place: "injection",
             self.pb_vent_place: "vents",
+            self.pb_key_place: "keys",
+            self.pb_bolt_place: "bolts",
             self.pb_parting_pick: "parting",
         }
         for btn, btn_mode in buttons.items():
@@ -1370,6 +1626,8 @@ class MoldWizardPanel(object):
         self.pb_pull.setChecked(False)
         self.pb_inj_place.setChecked(False)
         self.pb_vent_place.setChecked(False)
+        self.pb_key_place.setChecked(False)
+        self.pb_bolt_place.setChecked(False)
         self.pb_parting_pick.setChecked(False)
         if self.cursor_overridden:
             QtWidgets.QApplication.restoreOverrideCursor()
@@ -1491,6 +1749,16 @@ class MoldWizardPanel(object):
 
     def _on_explode_changed(self, value):
         self.lbl_explode_val.setText(str(value))
+        # Debounce: update the label immediately but delay the expensive
+        # recompute until the slider has settled (150 ms without movement).
+        if not hasattr(self, "_explode_timer"):
+            self._explode_timer = QtCore.QTimer()
+            self._explode_timer.setSingleShot(True)
+            self._explode_timer.timeout.connect(self._apply_explode)
+        self._explode_timer.start(150)
+
+    def _apply_explode(self):
+        value = self.slider_explode.value()
         if self.job is not None and hasattr(self.job, "Exploded"):
             self.job.Exploded = float(value)
             try:
@@ -1648,6 +1916,11 @@ class MoldWizardPanel(object):
         job.KeyHeight = self.sb_key_height.value()
         job.KeyClearance = self.sb_key_clearance.value()
         job.KeyInset = self.sb_key_inset.value()
+        if self._custom_key_positions:
+            job.KeyPositions = self._custom_key_positions
+            job.UseCustomKeyPositions = True
+        else:
+            job.UseCustomKeyPositions = False
 
         # Hardware (bolts)
         job.Bolts = self.grp_hardware.isChecked()
@@ -1657,6 +1930,11 @@ class MoldWizardPanel(object):
         job.BoltClearance = self.sb_bolt_clearance.value()
         job.Counterbore = self.chk_counterbore.isChecked()
         job.NutTrap = self.chk_nut_trap.isChecked()
+        if self._custom_bolt_positions:
+            job.BoltPositions = self._custom_bolt_positions
+            job.UseCustomBoltPositions = True
+        else:
+            job.UseCustomBoltPositions = False
 
         # Pry slots
         job.PrySlots = self.grp_pry.isChecked()
@@ -1785,6 +2063,17 @@ class MoldWizardPanel(object):
         self.sb_key_height.setValue(float(job.KeyHeight))
         self.sb_key_clearance.setValue(float(job.KeyClearance))
         self.sb_key_inset.setValue(float(job.KeyInset))
+        if getattr(job, "UseCustomKeyPositions", False):
+            try:
+                self._custom_key_positions = [App.Vector(v) for v in job.KeyPositions]
+                count = len(self._custom_key_positions)
+                if count > 0:
+                    self.le_key_pos.setText(
+                        "%d point%s picked" % (count, "s" if count != 1 else "")
+                    )
+                    self.pb_key_clear.show()
+            except Exception:
+                pass
 
         self.grp_hardware.setChecked(bool(getattr(job, "Bolts", False)))
         self.sb_bolt_count.setValue(int(getattr(job, "BoltCount", 4)))
@@ -1798,6 +2087,17 @@ class MoldWizardPanel(object):
         )
         self.chk_counterbore.setChecked(bool(getattr(job, "Counterbore", True)))
         self.chk_nut_trap.setChecked(bool(getattr(job, "NutTrap", True)))
+        if getattr(job, "UseCustomBoltPositions", False):
+            try:
+                self._custom_bolt_positions = [App.Vector(v) for v in job.BoltPositions]
+                count = len(self._custom_bolt_positions)
+                if count > 0:
+                    self.le_bolt_pos.setText(
+                        "%d point%s picked" % (count, "s" if count != 1 else "")
+                    )
+                    self.pb_bolt_clear.show()
+            except Exception:
+                pass
 
         self.grp_pry.setChecked(bool(job.PrySlots))
         self.sb_pry_w.setValue(float(job.PrySlotWidth))
@@ -1821,35 +2121,65 @@ class MoldWizardPanel(object):
         self._update_direction_indicator()
 
     # ------------------------------------------------------------------
-    # Status display (redesigned)
+    # Presets
+    # ------------------------------------------------------------------
+
+    def _on_presets(self):
+        from ..app import presets
+
+        def _do_save(name):
+            data = presets.collect_from_widgets(self)
+            presets.save_preset(name, data)
+            self._active_preset = name
+            self._show_status("success", 'Preset "%s" saved.' % name)
+
+        dlg = _PresetDialog(
+            presets.list_presets(), self._active_preset, _do_save,
+            Gui.getMainWindow(),
+        )
+        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            # Dialog was closed or cancelled; active preset may have changed
+            # via save/delete done inline.
+            self._active_preset = dlg._active_preset
+            return
+
+        # Only "load" exits with Accepted
+        name = dlg.chosen_name
+        self._active_preset = dlg._active_preset
+
+        if name is None:
+            # "(No preset)" selected
+            self._active_preset = None
+            self._show_status("info", "Preset cleared.")
+            return
+
+        data = presets.load_preset(name)
+        if data is None:
+            self._show_status("warning", 'Could not read preset "%s".' % name)
+            return
+        presets.apply_to_widgets(self, data)
+        self._active_preset = name
+        self._show_status("success", 'Preset "%s" loaded.' % name)
+
+    # ------------------------------------------------------------------
+    # Status display (FreeCAD Report View)
     # ------------------------------------------------------------------
 
     def _show_status(self, level, text):
-        """Write a status message into the diagnostics browser as HTML.
+        """Log a status message to the FreeCAD Report View.
 
         level: "warning", "error", "success", "info"
         """
-        colours = {
-            "warning": "#c07000",
-            "error":   "#c03030",
-            "success": "#207840",
-            "info":    "#306090",
-        }
-        icons = {
-            "warning": _WARNING_ICON,
-            "error":   _WARNING_ICON,
-            "success": _SUCCESS_ICON,
-            "info":    _INFO_ICON,
-        }
-        colour = colours.get(level, "#306090")
-        icon = icons.get(level, _INFO_ICON)
-        escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        html_body = escaped.replace("\n", "<br>")
-        html = (
-            '<div style="color:%s; font-size:11px; padding:4px;">'
-            '<b>%s</b>&nbsp; %s</div>' % (colour, icon, html_body)
-        )
-        self.diag_browser.setHtml(html)
+        prefix = "[Molding] "
+        for line in text.split("\n"):
+            if not line.strip():
+                continue
+            if level == "error":
+                App.Console.PrintError(prefix + line + "\n")
+            elif level == "warning":
+                App.Console.PrintWarning(prefix + line + "\n")
+            else:
+                App.Console.PrintMessage(prefix + line + "\n")
 
     def _show_result(self, result):
         if result is None:
@@ -1860,17 +2190,14 @@ class MoldWizardPanel(object):
         )
 
         if result.warnings:
-            parts = list(result.warnings)
-            if result.notes:
-                parts.append("")
-                for note in result.notes:
-                    parts.append("%s %s" % (_INFO_ICON, note))
-            self._show_status("warning", "\n".join(parts))
-        elif result.notes:
-            parts = [summary, ""]
+            for w in result.warnings:
+                self._show_status("warning", w)
             for note in result.notes:
-                parts.append("%s %s" % (_INFO_ICON, note))
-            self._show_status("success", "\n".join(parts))
+                self._show_status("info", note)
+        elif result.notes:
+            self._show_status("success", summary)
+            for note in result.notes:
+                self._show_status("info", note)
         else:
             self._show_status("success", summary)
 

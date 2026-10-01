@@ -38,18 +38,69 @@ def selected_solid():
 def direction_from_selection():
     """Pull direction implied by the selection.
 
-    A planar face gives its normal. A straight edge gives its own direction,
-    which is how you nominate a draw axis off a chamfer or a shaft. Anything
-    else gives nothing, and the caller keeps whatever it had.
+    A planar face gives its normal. A cylindrical, conical, toroidal, or
+    spherical face gives its symmetry axis (useful for picking the pull
+    direction off a round feature). A circular or elliptical edge likewise
+    gives the axis of its underlying curve. A straight edge gives its own
+    direction, which is how you nominate a draw axis off a chamfer or a shaft.
+    Anything else gives nothing, and the caller keeps whatever it had.
     """
+    from ..core.frame import normalized
+
     for _obj, shape in sub_shapes():
-        if shape.ShapeType == "Face" and is_planar(shape):
-            return face_normal(shape)
-        if shape.ShapeType == "Edge" and shape.Curve.TypeId == "Part::GeomLine":
-            direction = shape.Vertexes[-1].Point - shape.Vertexes[0].Point
-            if direction.Length > 1e-9:
-                direction.normalize()
-                return direction
+        if shape.ShapeType == "Face":
+            if is_planar(shape):
+                return face_normal(shape)
+            axis = _surface_axis(shape)
+            if axis is not None:
+                return axis
+        if shape.ShapeType == "Edge":
+            axis = _curve_axis(shape)
+            if axis is not None:
+                return axis
+            if shape.Curve.TypeId == "Part::GeomLine":
+                direction = shape.Vertexes[-1].Point - shape.Vertexes[0].Point
+                if direction.Length > 1e-9:
+                    direction.normalize()
+                    return direction
+    return None
+
+
+def _surface_axis(face):
+    """Extract the symmetry axis from a cylindrical, conical, or toroidal face."""
+    from ..core.frame import normalized
+
+    surface = face.Surface
+    type_id = surface.TypeId
+    # Cylinder, Cone, and Toroid all expose an Axis attribute
+    if type_id in (
+        "Part::GeomCylinder",
+        "Part::GeomCone",
+        "Part::GeomToroid",
+        "Part::GeomSphere",
+    ):
+        try:
+            axis = App.Vector(surface.Axis)
+            if axis.Length > 1e-9:
+                return normalized(axis)
+        except Exception:
+            pass
+    return None
+
+
+def _curve_axis(edge):
+    """Extract the axis from a circular or elliptical edge."""
+    from ..core.frame import normalized
+
+    curve = edge.Curve
+    type_id = curve.TypeId
+    if type_id in ("Part::GeomCircle", "Part::GeomEllipse"):
+        try:
+            axis = App.Vector(curve.Axis)
+            if axis.Length > 1e-9:
+                return normalized(axis)
+        except Exception:
+            pass
     return None
 
 

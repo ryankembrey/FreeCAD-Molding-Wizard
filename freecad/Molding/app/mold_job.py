@@ -298,6 +298,8 @@ def add_properties(obj):
     prop("App::PropertyDistance", "KeyHeight", "Registration", "How far the key stands proud", DEFAULTS["KeyHeight"])
     prop("App::PropertyDistance", "KeyClearance", "Registration", "Pocket clearance for print fit", DEFAULTS["KeyClearance"])
     prop("App::PropertyDistance", "KeyInset", "Registration", "Distance from block edge to key", DEFAULTS["KeyInset"])
+    prop("App::PropertyVectorList", "KeyPositions", "Registration", "Custom key placement points (global coordinates)")
+    prop("App::PropertyBool", "UseCustomKeyPositions", "Registration", "Use manually picked key positions", False)
 
     # -- Injection (syringe) --
     prop("App::PropertyBool", "InjectionPort", "Injection", "Add a syringe injection port", True)
@@ -383,6 +385,8 @@ def add_properties(obj):
     prop("App::PropertyDistance", "BoltClearance", "Hardware", "Extra diameter for print fit", 0.3)
     prop("App::PropertyBool", "Counterbore", "Hardware", "Sink the bolt head", True)
     prop("App::PropertyBool", "NutTrap", "Hardware", "Nut pocket for captive nut", True)
+    prop("App::PropertyVectorList", "BoltPositions", "Hardware", "Custom bolt placement points (global coordinates)")
+    prop("App::PropertyBool", "UseCustomBoltPositions", "Hardware", "Use manually picked bolt positions", False)
 
     # -- Build --
     prop("App::PropertyBool", "AutoUpdate", "Build", "Rebuild whenever a parameter changes", True)
