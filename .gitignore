@@ -1,6 +1,8 @@
 pyrightconfig.json
 *.step
-*__pycache__
+__pycache__/
+*.py[cod]
+*$py.class
 *.FCBak
 *.FCStd
 *.step
