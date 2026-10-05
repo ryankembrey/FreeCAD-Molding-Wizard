@@ -37,14 +37,59 @@ class BuildResult(object):
         return [(p.key, p.label, p.shape) for p in self.pieces]
 
 
-def build(job):
-    """Run the pipeline for a MoldJob document object."""
+def build(job, progress_fn=None):
+    """Run the pipeline for a MoldJob document object.
+
+    *progress_fn*, when provided, is called with ``(step_number, total_steps,
+    description)`` before each major stage so the GUI can update a progress
+    bar.  Disabled features are skipped entirely so the bar only counts
+    stages that do real work.
+    """
     result = BuildResult()
 
     source = getattr(job, "Source", None)
     if source is None or not hasattr(source, "Shape") or source.Shape.isNull():
         result.warnings.append("No source part is set on this job.")
         return result
+
+    # Pre-check which optional features are enabled so the progress bar
+    # only counts steps that will actually do work.
+    has_gutter = bool(job.Gutter)
+    has_keys = bool(job.RegistrationKeys)
+    has_injection = bool(getattr(job, "InjectionPort", False))
+    has_pour = bool(getattr(job, "PourPort", False))
+    has_vents = int(job.VentCount) > 0
+    has_bolts = bool(getattr(job, "Bolts", False))
+    has_pry = bool(job.PrySlots)
+    has_emboss = bool(getattr(job, "Emboss", False))
+
+    n_steps = 5  # prepare, block, cavity, split, finish (always run)
+    if has_gutter:
+        n_steps += 1
+    if has_keys:
+        n_steps += 1
+    if has_injection:
+        n_steps += 1
+    if has_pour:
+        n_steps += 1
+    if has_vents:
+        n_steps += 1
+    if has_bolts:
+        n_steps += 1
+    if has_pry:
+        n_steps += 1
+    if has_emboss:
+        n_steps += 1
+
+    last_step = n_steps - 1
+    step = [0]
+
+    def _step(text):
+        if progress_fn is not None:
+            progress_fn(step[0], last_step, text)
+        step[0] += 1
+
+    _step("Preparing geometry…")
 
     frame = local_frame(job.PullDirection)
     result.frame = frame
@@ -62,6 +107,8 @@ def build(job):
     parting_height = min(max(parting_height, part_box.ZMin + 1e-3), part_box.ZMax - 1e-3)
     result.parting_height = parting_height
 
+    _step("Building mold block…")
+
     style_is_cylinder = job.BlockStyle == BLOCK_CYLINDER
     body = blockmod.make_block(
         part_box,
@@ -72,6 +119,8 @@ def build(job):
         float(job.BlockFillet),
     )
     block_box = body.BoundBox
+
+    _step("Cutting cavity…")
 
     try:
         hollow = body.cut(part)
@@ -87,14 +136,17 @@ def build(job):
             "is no cavity opening and no gutter."
         )
 
+    _step("Splitting at parting line…")
+
     pieces = splitmod.split_block(
         hollow, parting_height, job.Layout, float(job.SecondaryAngle), block_box
     )
     if len(pieces) < 2:
         result.warnings.append("The parting plane did not divide the block into pieces.")
 
-    # Gutter first: it defines the keep out zone the keys and bolts avoid.
-    if job.Gutter:
+    # Gutter first: it defines the keep-out zone the keys and bolts avoid.
+    if has_gutter:
+        _step("Adding overflow gutter…")
         _guard(
             result,
             "overflow gutter",
@@ -122,7 +174,8 @@ def build(job):
                 ),
             })
 
-    if job.RegistrationKeys:
+    if has_keys:
+        _step("Adding registration keys…")
         params = {
             "diameter": float(job.KeyDiameter),
             "height": float(job.KeyHeight),
@@ -183,8 +236,9 @@ def build(job):
                 "point": kp,
             })
 
-    # Injection port (syringe adapter) replaces the old pour port
-    if getattr(job, "InjectionPort", False):
+    # Injection port (syringe adapter) replaces the old pour port.
+    if has_injection:
+        _step("Adding injection port…")
         from ..core.features import injection
 
         custom_inj = None
@@ -219,7 +273,8 @@ def build(job):
             })
 
     # Legacy pour port support
-    if getattr(job, "PourPort", False):
+    if has_pour:
+        _step("Adding pour port…")
         _guard(
             result,
             "pour port",
@@ -233,7 +288,8 @@ def build(job):
             float(job.FunnelDepth),
         )
 
-    if int(job.VentCount) > 0:
+    if has_vents:
+        _step("Adding vents…")
         custom_vent_pos = None
         if getattr(job, "UseCustomVentPositions", False):
             try:
@@ -272,7 +328,8 @@ def build(job):
                     "point": vp,
                 })
 
-    if getattr(job, "Bolts", False):
+    if has_bolts:
+        _step("Adding bolt holes…")
         requested = int(getattr(job, "BoltCount", 4))
         bolt_spec = fasteners.BOLTS.get(job.BoltSize, {})
         bolt_hole_r = (bolt_spec.get("clearance", 4.5) + float(job.BoltClearance)) / 2.0
@@ -345,7 +402,8 @@ def build(job):
                 "point": App.Vector(bp.x, bp.y, parting_height),
             })
 
-    if job.PrySlots:
+    if has_pry:
+        _step("Adding pry slots…")
         _guard(
             result,
             "pry slots",
@@ -371,7 +429,8 @@ def build(job):
             "point": App.Vector(cx - reach, cy, parting_height),
         })
 
-    if getattr(job, "Emboss", False):
+    if has_emboss:
+        _step("Adding embossment…")
         from ..core.features import emboss
 
         _guard(
@@ -386,6 +445,8 @@ def build(job):
             float(getattr(job, "EmbossDepth", 0.8)),
             str(getattr(job, "EmbossPlacement", "Side wall")),
         )
+
+    _step("Finishing up…")
 
     _measure(result, part, parting_height, float(job.OverpourPercent))
 

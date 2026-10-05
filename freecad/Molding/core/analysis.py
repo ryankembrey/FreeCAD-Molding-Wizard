@@ -91,11 +91,14 @@ def _box_contains(outer, inner, tol=1e-6):
     )
 
 
-def parting_profile(shape, samples=64):
+def parting_profile(shape, samples=64, progress_fn=None):
     """Cross section area sampled up the pull axis.
 
     Returns a list of (height, area). Useful both for picking a parting height
     and for showing the user why that height was picked.
+
+    *progress_fn*, when provided, is called with ``(sample_number, total)``
+    after each slice so the GUI can keep a progress bar alive.
     """
     box = shape.BoundBox
     span = box.ZLength
@@ -107,10 +110,12 @@ def parting_profile(shape, samples=64):
         t = (i + 0.5) / float(samples)
         z = box.ZMin + span * t
         profile.append((z, section_area(shape, z)))
+        if progress_fn is not None:
+            progress_fn(i + 1, samples)
     return profile
 
 
-def suggest_parting_height(shape, samples=64):
+def suggest_parting_height(shape, samples=64, progress_fn=None):
     """Height of the widest cross section.
 
     For the blobby, organic parts that get silicone moulded this lands on the
@@ -118,7 +123,7 @@ def suggest_parting_height(shape, samples=64):
     is widest, so it is the height at which neither half has to reach around
     the widest point to let go.
     """
-    profile = parting_profile(shape, samples)
+    profile = parting_profile(shape, samples, progress_fn=progress_fn)
     if not profile:
         box = shape.BoundBox
         return box.ZMin + box.ZLength / 2.0

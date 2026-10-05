@@ -290,6 +290,11 @@ class MoldWizardPanel(object):
         self._escape_filter = _EscapeFilter(self._on_escape)
         for panel in self.form:
             panel.installEventFilter(self._escape_filter)
+        # Also install on the main window so Escape works while the
+        # 3D viewport has focus (e.g. during selection mode).
+        self._main_window = Gui.getMainWindow()
+        if self._main_window is not None:
+            self._main_window.installEventFilter(self._escape_filter)
 
         if job is not None:
             self._load_from_job(job)
@@ -1021,6 +1026,7 @@ class MoldWizardPanel(object):
 
     def _on_clear_vent_positions(self):
         self._custom_vent_positions = []
+        self._vent_element_names = []
         self.le_vent_pos.clear()
         self.pb_vent_clear.hide()
 
@@ -1101,6 +1107,7 @@ class MoldWizardPanel(object):
 
     def _on_clear_key_positions(self):
         self._custom_key_positions = []
+        self._key_element_names = []
         self.le_key_pos.clear()
         self.pb_key_clear.hide()
 
@@ -1217,6 +1224,7 @@ class MoldWizardPanel(object):
 
     def _on_clear_bolt_positions(self):
         self._custom_bolt_positions = []
+        self._bolt_element_names = []
         self.le_bolt_pos.clear()
         self.pb_bolt_clear.hide()
 
@@ -1453,10 +1461,30 @@ class MoldWizardPanel(object):
         self._run_slow_update()
         self._update_generate_state()
 
+    @staticmethod
+    def _sub_element_names():
+        """Return the sub-element name strings from the current selection.
+
+        FreeCAD stores names like ``Face3``, ``Edge5``, ``Vertex10`` on each
+        ``SelectionObject`` returned by ``getSelectionEx()``.
+        """
+        names = []
+        try:
+            for sel in Gui.Selection.getSelectionEx():
+                if sel.SubElementNames:
+                    names.extend(sel.SubElementNames)
+        except Exception:
+            pass
+        return names
+
     def _apply_pull(self, direction):
         self.pull_dir = direction
         self.pull_flipped = False
-        self.pull_ref = "%.3f, %.3f, %.3f" % (direction.x, direction.y, direction.z)
+        names = self._sub_element_names()
+        if names:
+            self.pull_ref = ", ".join(names)
+        else:
+            self.pull_ref = "%.3f, %.3f, %.3f" % (direction.x, direction.y, direction.z)
         self.le_pull.setText(self.pull_ref)
         self.pb_pull.setChecked(False)
         self._run_slow_update()
@@ -1470,31 +1498,64 @@ class MoldWizardPanel(object):
             for s in sel_ex:
                 if s.PickedPoints:
                     pt = App.Vector(s.PickedPoints[0])
+                    # Gather the sub-element name(s) for display
+                    elem_names = list(s.SubElementNames) if s.SubElementNames else []
+                    elem_label = ", ".join(elem_names) if elem_names else (
+                        "%.1f, %.1f, %.1f" % (pt.x, pt.y, pt.z)
+                    )
                     if mode == "injection":
                         self._custom_injection_pos = pt
-                        self.le_inj_pos.setText(
-                            "%.1f, %.1f, %.1f" % (pt.x, pt.y, pt.z)
-                        )
+                        self.le_inj_pos.setText(elem_label)
                     elif mode == "vents":
                         self._custom_vent_positions.append(pt)
-                        count = len(self._custom_vent_positions)
-                        self.le_vent_pos.setText(
-                            "%d point%s picked" % (count, "s" if count != 1 else "")
-                        )
+                        if elem_names:
+                            self._vent_element_names = getattr(
+                                self, "_vent_element_names", []
+                            )
+                            self._vent_element_names.extend(elem_names)
+                            self.le_vent_pos.setText(
+                                ", ".join(self._vent_element_names)
+                            )
+                        else:
+                            count = len(self._custom_vent_positions)
+                            self.le_vent_pos.setText(
+                                "%d point%s picked"
+                                % (count, "s" if count != 1 else "")
+                            )
                         self.pb_vent_clear.show()
                     elif mode == "keys":
                         self._custom_key_positions.append(pt)
-                        count = len(self._custom_key_positions)
-                        self.le_key_pos.setText(
-                            "%d point%s picked" % (count, "s" if count != 1 else "")
-                        )
+                        if elem_names:
+                            self._key_element_names = getattr(
+                                self, "_key_element_names", []
+                            )
+                            self._key_element_names.extend(elem_names)
+                            self.le_key_pos.setText(
+                                ", ".join(self._key_element_names)
+                            )
+                        else:
+                            count = len(self._custom_key_positions)
+                            self.le_key_pos.setText(
+                                "%d point%s picked"
+                                % (count, "s" if count != 1 else "")
+                            )
                         self.pb_key_clear.show()
                     elif mode == "bolts":
                         self._custom_bolt_positions.append(pt)
-                        count = len(self._custom_bolt_positions)
-                        self.le_bolt_pos.setText(
-                            "%d point%s picked" % (count, "s" if count != 1 else "")
-                        )
+                        if elem_names:
+                            self._bolt_element_names = getattr(
+                                self, "_bolt_element_names", []
+                            )
+                            self._bolt_element_names.extend(elem_names)
+                            self.le_bolt_pos.setText(
+                                ", ".join(self._bolt_element_names)
+                            )
+                        else:
+                            count = len(self._custom_bolt_positions)
+                            self.le_bolt_pos.setText(
+                                "%d point%s picked"
+                                % (count, "s" if count != 1 else "")
+                            )
                         self.pb_bolt_clear.show()
                     return
         except Exception:
@@ -1524,27 +1585,48 @@ class MoldWizardPanel(object):
 
         These operations involve ``transformShape`` and analysis passes that
         can take several seconds on complex geometry, so we show the wait
-        cursor and a status message while they run.
+        cursor, a progress bar, and a status message while they run.
         """
         self._show_status("info", "Analysing geometry…")
+        self.progress.setRange(0, 1000)
+        self.progress.setValue(0)
+        self.progress.setFormat("Transforming shape…")
+        self.progress.show()
         QtWidgets.QApplication.setOverrideCursor(
             QtCore.Qt.CursorShape.WaitCursor
         )
         QtWidgets.QApplication.processEvents()
         try:
-            self._suggest_parting()
+            def _analysis_progress(sample, total):
+                val = 50 + int(900 * sample / max(total, 1))
+                self.progress.setValue(val)
+                self.progress.setFormat(
+                    "Analysing shape (%d/%d)…" % (sample, total)
+                )
+                QtWidgets.QApplication.processEvents()
+
+            self._suggest_parting(progress_fn=_analysis_progress)
+            self.progress.setValue(950)
+            self.progress.setFormat("Updating display…")
+            QtWidgets.QApplication.processEvents()
             self._update_direction_indicator()
+            self.progress.setValue(1000)
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()
+            self.progress.hide()
 
-    def _suggest_parting(self):
+    def _suggest_parting(self, progress_fn=None):
         """Drop the parting plane on the widest section of the current part."""
         if self.target_object is None:
             return
         try:
             frame = local_frame(self.pull_dir)
             local = to_local(self.target_object.Shape, frame)
-            height = analysis.suggest_parting_height(local)
+            if progress_fn is not None:
+                progress_fn(0, 64)  # signal transform is done
+            height = analysis.suggest_parting_height(
+                local, progress_fn=progress_fn,
+            )
             offset = height - local.BoundBox.ZMin
             self.sb_parting.setValue(offset)
         except Exception:
@@ -1776,13 +1858,38 @@ class MoldWizardPanel(object):
             self._show_status("warning", "Select a solid body first.")
             return
 
-        self.progress.setRange(0, 0)
+        self.progress.setRange(0, 1000)
+        self.progress.setValue(0)
+        self.progress.setFormat("Preparing…")
         self.progress.show()
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
+
+        def _update_progress(step, total, text):
+            target = int(step * 1000 / max(total, 1))
+            current = self.progress.value()
+            self.progress.setFormat(text)
+
+            # Ramp smoothly from current value to target over ~120 ms
+            # instead of jumping in one go.
+            delta = target - current
+            if delta > 0:
+                n_ticks = min(delta, 24)
+                elapsed = QtCore.QElapsedTimer()
+                elapsed.start()
+                for i in range(1, n_ticks + 1):
+                    due = int(120.0 * i / n_ticks)
+                    while elapsed.elapsed() < due:
+                        QtWidgets.QApplication.processEvents()
+                    val = current + int(delta * i / n_ticks)
+                    self.progress.setValue(min(val, target))
+            else:
+                self.progress.setValue(target)
+                QtWidgets.QApplication.processEvents()
+
         try:
             job = self._ensure_job()
             self._apply_to_job(job)
-            result = mold_job.rebuild(job)
+            result = mold_job.rebuild(job, progress_fn=_update_progress)
             self._last_result = result
             self._show_result(result)
             self.pb_clear.setEnabled(True)
@@ -2228,9 +2335,15 @@ class MoldWizardPanel(object):
         return True
 
     def _cleanup(self):
-        """Remove selection observer and viewport overlays."""
+        """Remove selection observer, event filters, and viewport overlays."""
         try:
             Gui.Selection.removeObserver(self)
+        except Exception:
+            pass
+        try:
+            mw = getattr(self, "_main_window", None)
+            if mw is not None:
+                mw.removeEventFilter(self._escape_filter)
         except Exception:
             pass
         self._remove_direction_indicator()

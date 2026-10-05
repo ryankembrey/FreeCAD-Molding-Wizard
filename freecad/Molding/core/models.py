@@ -48,12 +48,15 @@ EXPORT_FORMATS = [EXPORT_STL, EXPORT_STEP, EXPORT_BOTH]
 
 # Metric socket head cap screw dimensions in mm.
 BOLTS = {
-    "M3": {"clearance": 3.4, "head": 6.2, "head_h": 3.2, "nut_af": 5.5, "nut_h": 2.4},
-    "M4": {"clearance": 4.5, "head": 8.2, "head_h": 4.2, "nut_af": 7.0, "nut_h": 3.2},
-    "M5": {"clearance": 5.6, "head": 10.2, "head_h": 5.2, "nut_af": 8.0, "nut_h": 4.7},
-    "M6": {"clearance": 6.6, "head": 12.2, "head_h": 6.2, "nut_af": 10.0, "nut_h": 5.2},
+    "M3":  {"clearance": 3.4,  "head": 6.2,  "head_h": 3.2, "nut_af": 5.5,  "nut_h": 2.4},
+    "M4":  {"clearance": 4.5,  "head": 8.2,  "head_h": 4.2, "nut_af": 7.0,  "nut_h": 3.2},
+    "M5":  {"clearance": 5.6,  "head": 10.2, "head_h": 5.2, "nut_af": 8.0,  "nut_h": 4.7},
+    "M6":  {"clearance": 6.6,  "head": 12.2, "head_h": 6.2, "nut_af": 10.0, "nut_h": 5.2},
+    "M7":  {"clearance": 7.6,  "head": 14.2, "head_h": 7.2, "nut_af": 11.0, "nut_h": 5.5},
+    "M8":  {"clearance": 8.8,  "head": 16.2, "head_h": 8.2, "nut_af": 13.0, "nut_h": 6.8},
+    "M10": {"clearance": 11.0, "head": 20.2, "head_h": 10.2, "nut_af": 16.0, "nut_h": 8.4},
 }
-BOLT_SIZES = ["M3", "M4", "M5", "M6"]
+BOLT_SIZES = ["M3", "M4", "M5", "M6", "M7", "M8", "M10"]
 
 PLANAR_TOLERANCE = 1e-6
 UNDERCUT_TOLERANCE_DEG = 0.5

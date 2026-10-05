@@ -107,14 +107,18 @@ class MoldJob(object):
         rebuild(obj)
 
 
-def rebuild(obj):
-    """Run the build and push the results into the child objects."""
+def rebuild(obj, progress_fn=None):
+    """Run the build and push the results into the child objects.
+
+    *progress_fn*, when provided, is forwarded to ``build()`` so the GUI
+    can update a progress bar with ``(step, total, description)`` tuples.
+    """
     proxy = obj.Proxy
     if getattr(proxy, "building", False):
         return None
     proxy.building = True
     try:
-        result = buildmod.build(obj)
+        result = buildmod.build(obj, progress_fn=progress_fn)
         proxy._last_result = result
         _sync_children(obj, result)
         obj.CavityVolume = round(result.cavity_volume_ml, 3)
