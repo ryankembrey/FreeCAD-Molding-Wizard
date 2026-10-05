@@ -1864,10 +1864,33 @@ class MoldWizardPanel(object):
         self.progress.show()
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
 
+        _progress_timer = QtCore.QElapsedTimer()
+        _progress_timer.start()
+
         def _update_progress(step, total, text):
-            target = int(step * 1000 / max(total, 1))
+            # Map to 0..1000 range, but use (step+1) so the very first
+            # call already moves the bar forward and triggers the
+            # animation (otherwise step 0 lands on target 0 which
+            # matches the initial value and skips the animation entirely,
+            # making the first label invisible).
+            target = int((step + 1) * 1000 / max(total + 1, 1))
             current = self.progress.value()
             self.progress.setFormat(text)
+
+            # Make sure the new text is painted immediately so the user
+            # can read it even if the step completes very fast.
+            self.progress.repaint()
+
+            # Ensure each label stays visible for at least 180 ms so
+            # fast steps don't flash unreadably.  If time since the last
+            # call is shorter, spend the remainder pumping events so the
+            # UI stays responsive.
+            since_last = _progress_timer.elapsed()
+            if since_last < 180:
+                wait = QtCore.QElapsedTimer()
+                wait.start()
+                while wait.elapsed() < (180 - since_last):
+                    QtWidgets.QApplication.processEvents()
 
             # Ramp smoothly from current value to target over ~120 ms
             # instead of jumping in one go.
@@ -1885,6 +1908,8 @@ class MoldWizardPanel(object):
             else:
                 self.progress.setValue(target)
                 QtWidgets.QApplication.processEvents()
+
+            _progress_timer.start()
 
         try:
             job = self._ensure_job()

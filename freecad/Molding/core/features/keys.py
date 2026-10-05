@@ -87,6 +87,110 @@ def parting_key_points(bound_box, parting_height, inset, style_is_cylinder):
     ]
 
 
+def key_candidates(bound_box, parting_height, inset, style_is_cylinder, density=32):
+    """Generate a dense ring of candidate key positions around the block.
+
+    Same perimeter-walking logic as ``bolt_candidates`` in *fasteners*,
+    so keys get the same smart placement behaviour: many more candidates
+    than the final count, filtered and scored by the caller.
+
+    *density* controls how many candidates are placed (default 32, giving
+    roughly 11-degree spacing on a cylinder).
+    """
+    if density < 8:
+        density = 8
+
+    centre_x = bound_box.Center.x
+    centre_y = bound_box.Center.y
+
+    if style_is_cylinder:
+        radius = max(min(bound_box.XLength, bound_box.YLength) / 2.0 - inset, 1.0)
+        return [
+            App.Vector(
+                centre_x + radius * math.cos(math.radians(360.0 * i / density)),
+                centre_y + radius * math.sin(math.radians(360.0 * i / density)),
+                parting_height,
+            )
+            for i in range(density)
+        ]
+
+    # Box: walk the inset rectangle perimeter
+    x0 = bound_box.XMin + inset
+    x1 = bound_box.XMax - inset
+    y0 = bound_box.YMin + inset
+    y1 = bound_box.YMax - inset
+    if x1 <= x0 or y1 <= y0:
+        return []
+
+    w = x1 - x0
+    h = y1 - y0
+    perimeter = 2.0 * (w + h)
+    step = perimeter / density
+
+    points = []
+    for i in range(density):
+        d = (step * i) % perimeter
+        if d < w:
+            points.append(App.Vector(x0 + d, y0, parting_height))
+        elif d < w + h:
+            points.append(App.Vector(x1, y0 + (d - w), parting_height))
+        elif d < 2 * w + h:
+            points.append(App.Vector(x1 - (d - w - h), y1, parting_height))
+        else:
+            points.append(App.Vector(x0, y1 - (d - 2 * w - h), parting_height))
+    return points
+
+
+def select_key_positions(candidates, count, feature_points=None, min_feature_dist=8.0):
+    """Greedily pick *count* key positions that maximise mutual spacing.
+
+    Works the same as ``select_bolt_positions`` in *fasteners*: candidates
+    too close to existing features get a soft penalty rather than a hard
+    reject, and each pick maximises ``distance_to_nearest_selected * score``.
+    """
+    if not candidates or count <= 0:
+        return []
+
+    scores = []
+    for pt in candidates:
+        score = 1.0
+        if feature_points:
+            for fp in feature_points:
+                dx = pt.x - fp.x
+                dy = pt.y - fp.y
+                dist = math.sqrt(dx * dx + dy * dy)
+                if dist < min_feature_dist:
+                    score = min(score, dist / min_feature_dist)
+        scores.append(score)
+
+    selected = []
+    used = [False] * len(candidates)
+    for _ in range(min(count, len(candidates))):
+        best_idx = -1
+        best_merit = -1.0
+        for i, pt in enumerate(candidates):
+            if used[i]:
+                continue
+            if scores[i] < 0.01:
+                continue
+            if selected:
+                nearest = min(
+                    math.sqrt((pt.x - s.x) ** 2 + (pt.y - s.y) ** 2)
+                    for s in selected
+                )
+            else:
+                nearest = 1e6
+            merit = nearest * scores[i]
+            if merit > best_merit:
+                best_merit = merit
+                best_idx = i
+        if best_idx < 0:
+            break
+        selected.append(candidates[best_idx])
+        used[best_idx] = True
+    return selected
+
+
 def secondary_key_points(piece, inset):
     """Two positions on a vertical split face, one low and one high."""
     if piece.split_normal is None:

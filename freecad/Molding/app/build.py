@@ -204,13 +204,39 @@ def build(job, progress_fn=None):
                     key_positions.append(point_at_parting)
                     placed += 1
         else:
-            # Automatic placement at block corners
+            # Automatic placement: generate a dense ring of candidates and
+            # greedily try each one, same strategy as bolts.
             margin = float(job.GutterWidth) + float(job.GutterGap) if job.Gutter else 1.0
-            for point in keys.parting_key_points(
-                block_box, parting_height, float(job.KeyInset), style_is_cylinder
-            ):
-                if _too_close(wires, point, float(job.KeyDiameter) / 2.0 + margin):
-                    continue
+            key_r = float(job.KeyDiameter) / 2.0
+            target_count = 4
+
+            candidates = keys.key_candidates(
+                block_box, parting_height, float(job.KeyInset),
+                style_is_cylinder, density=max(target_count * 8, 32),
+            )
+            # Pre-filter: drop candidates too close to the cavity opening
+            candidates = [
+                p for p in candidates
+                if not _too_close(wires, p, key_r + margin)
+            ]
+
+            # Collect existing feature positions for soft avoidance
+            feature_xy = [
+                App.Vector(fp["point"].x, fp["point"].y, parting_height)
+                for fp in result.feature_points
+            ]
+            min_feat_dist = key_r * 2.0 + 2.0
+
+            # Greedy try-and-place: score candidates by spacing and feature
+            # distance, then attempt add_key_pair at the best; skip on
+            # failure and try the next best.
+            ranked = keys.select_key_positions(
+                candidates, len(candidates),
+                feature_xy, min_feat_dist,
+            )
+            for point in ranked:
+                if placed >= target_count:
+                    break
                 if keys.add_key_pair(pieces, point, App.Vector(0, 0, 1), params, part):
                     key_positions.append(point)
                     placed += 1
