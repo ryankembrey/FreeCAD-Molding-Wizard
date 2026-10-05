@@ -67,11 +67,17 @@ class MoldJob(object):
     def __init__(self, obj):
         obj.Proxy = self
         self.building = False
+        self._geo_cache = None
+        self._full_cache = None
+        self._feat_cache = None
         add_properties(obj)
 
     def onDocumentRestored(self, obj):
         obj.Proxy = self
         self.building = False
+        self._geo_cache = None
+        self._full_cache = None
+        self._feat_cache = None
         add_properties(obj)
 
     def dumps(self):
@@ -79,6 +85,9 @@ class MoldJob(object):
 
     def loads(self, state):
         self.building = False
+        self._geo_cache = None
+        self._full_cache = None
+        self._feat_cache = None
         return None
 
     __getstate__ = dumps
@@ -98,12 +107,25 @@ class MoldJob(object):
             obj.purgeTouched()
             if prop == "Exploded":
                 _update_explode(obj)
+        elif prop in ("Source", "PullDirection", "Shrink", "PartingOffset",
+                      "BlockStyle", "WallThickness", "FloorThickness",
+                      "RoofThickness", "BlockFillet", "Layout", "SecondaryAngle"):
+            App.Console.PrintMessage(
+                "[Molding:DEBUG] onChanged: geometry prop '%s' written\n" % prop
+            )
 
     def execute(self, obj):
+        App.Console.PrintMessage(
+            "[Molding:DEBUG] execute() called. building=%s AutoUpdate=%s\n"
+            % (getattr(self, "building", "?"), getattr(obj, "AutoUpdate", "?"))
+        )
         if getattr(self, "building", False):
+            App.Console.PrintMessage("[Molding:DEBUG]   execute() skipped (building=True)\n")
             return
         if not obj.AutoUpdate:
+            App.Console.PrintMessage("[Molding:DEBUG]   execute() skipped (AutoUpdate=False)\n")
             return
+        App.Console.PrintMessage("[Molding:DEBUG]   execute() PROCEEDING with rebuild()\n")
         rebuild(obj)
 
 
@@ -112,14 +134,40 @@ def rebuild(obj, progress_fn=None):
 
     *progress_fn*, when provided, is forwarded to ``build()`` so the GUI
     can update a progress bar with ``(step, total, description)`` tuples.
+
+    The geometry cache is stored on the proxy and passed automatically,
+    so consecutive rebuilds that only change feature parameters (key
+    diameter, vent count, bolt size, etc.) skip the expensive cavity and
+    split computations.
     """
     proxy = obj.Proxy
+    App.Console.PrintMessage(
+        "[Molding:DEBUG] rebuild() called. proxy id=%d, building=%s, "
+        "_geo_cache is None: %s, has progress_fn: %s\n"
+        % (id(proxy), getattr(proxy, "building", "?"),
+           getattr(proxy, "_geo_cache", "MISSING") is None,
+           progress_fn is not None)
+    )
     if getattr(proxy, "building", False):
+        App.Console.PrintMessage("[Molding:DEBUG]   rebuild() skipped (already building)\n")
         return None
     proxy.building = True
     try:
-        result = buildmod.build(obj, progress_fn=progress_fn)
+        geo_cache = getattr(proxy, "_geo_cache", None)
+        full_cache = getattr(proxy, "_full_cache", None)
+        feat_cache = getattr(proxy, "_feat_cache", None)
+        result, new_geo_cache, new_full_cache, new_feat_cache = buildmod.build(
+            obj, progress_fn=progress_fn, cache=geo_cache,
+            full_cache=full_cache, feat_cache=feat_cache,
+        )
         proxy._last_result = result
+        proxy._geo_cache = new_geo_cache
+        proxy._full_cache = new_full_cache
+        proxy._feat_cache = new_feat_cache
+        App.Console.PrintMessage(
+            "[Molding:DEBUG]   rebuild() stored caches. geo is None: %s, full is None: %s, feat is None: %s\n"
+            % (new_geo_cache is None, new_full_cache is None, new_feat_cache is None)
+        )
         _sync_children(obj, result)
         obj.CavityVolume = round(result.cavity_volume_ml, 3)
         obj.SuggestedPour = round(result.suggested_pour_ml, 3)
