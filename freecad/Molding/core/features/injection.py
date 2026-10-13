@@ -10,8 +10,11 @@ Two connection styles:
 * **Friction Fit**: a plain tapered hole sized for a Luer slip (non-
   locking) syringe.  The user pushes the tip in and the taper grips.
 
-The injection channel runs from the top surface of the upper mold half
-straight down until it meets the cavity (like SolidWorks "Up to Next").
+The injection channel is a "through all" cut scoped to the upper mold
+half. The halves are already separate bodies by the time this runs, so a
+straight cylinder from the top of the block down through the whole upper
+body always opens into the cavity, with no need to probe for where the
+cavity ceiling is.
 """
 
 import FreeCAD as App
@@ -24,46 +27,6 @@ from ..models import (
     SYRINGE_SIZES,
     DEFAULT_SYRINGE,
 )
-
-
-def _find_cavity_z(pieces, x, y, block_top):
-    """Ray-cast downward from (x, y, block_top) to find the cavity ceiling.
-
-    Steps down through the upper mold piece and returns the Z where the
-    first solid-to-void transition occurs, i.e. the ceiling of the cavity
-    at that XY position. A binary search refines the result to sub-micron
-    precision after the coarse scan finds the right interval.
-
-    Falls back to *None* if no intersection is found.
-    """
-    for piece in pieces:
-        if piece.side != "above":
-            continue
-        shape = piece.shape
-        try:
-            step = 0.1
-            # Start slightly inside the top face so isInside reliably
-            # reports True for the mold wall.
-            z = block_top - 0.05
-            inside_prev = shape.isInside(App.Vector(x, y, z), 1e-4, True)
-            while z > shape.BoundBox.ZMin:
-                z -= step
-                inside_now = shape.isInside(App.Vector(x, y, z), 1e-4, True)
-                if inside_prev and not inside_now:
-                    # Transitioned from solid to void: this is the cavity
-                    # ceiling.  Refine with binary search.
-                    lo, hi = z, z + step
-                    for _ in range(20):
-                        mid = (lo + hi) / 2.0
-                        if shape.isInside(App.Vector(x, y, mid), 1e-4, True):
-                            hi = mid
-                        else:
-                            lo = mid
-                    return lo
-                inside_prev = inside_now
-        except Exception:
-            pass
-    return None
 
 
 def add_injection_port(
@@ -123,37 +86,35 @@ def add_injection_port(
             except Exception:
                 return None
 
-    # -- Injection channel --
-    # Ray-cast downward to find where the channel meets the cavity
-    # ("Up to Next"), so the bore always connects regardless of how far
-    # the part extends above the parting height.
+    # Injection channel
+    # A through-all cut scoped to the upper piece(s): the cylinder starts
+    # below the lowest face of any upper piece and runs up to just under the
+    # adapter seat. Whatever material lies in that column (the block wall
+    # above the cavity) is removed, and the bore breaks into the cavity
+    # wherever it happens to be, however curved the cavity ceiling is.
+    uppers = [piece for piece in pieces if piece.side == "above"]
+    if not uppers:
+        return None
+
     channel_r = channel_diameter / 2.0
     adapter_seat_z = block_top - adapter_depth
 
-    cavity_z = _find_cavity_z(pieces, centre.x, centre.y, block_top)
-    if cavity_z is None:
-        cavity_z = parting_height
-
-    # Start the channel below the cavity ceiling so the bore fully
-    # breaks into the void.  On sharply curved tips (e.g. a condom
-    # shape) the cavity surface at the cylinder edges is higher than
-    # at the centre where the ray-cast landed, so the overshoot must
-    # cover at least the channel radius to guarantee a clean cut.
-    overshoot = max(1.0, channel_r)
-    channel_bottom = cavity_z - overshoot
-    channel_height = adapter_seat_z - channel_bottom + 0.5
-    if channel_height <= 0:
-        channel_height = block_top - channel_bottom + 1.0
-        adapter_seat_z = channel_bottom + channel_height - 1.0
+    channel_bottom = min(piece.shape.BoundBox.ZMin for piece in uppers) - 1.0
+    # Overlap the adapter seat slightly so the bore and the adapter recess
+    # merge into one clean opening.
+    channel_top = adapter_seat_z + 0.5
+    if channel_top <= channel_bottom:
+        # Block shallower than the adapter recess: run the bore to the top.
+        channel_top = block_top + 1.0
 
     channel = Part.makeCylinder(
         channel_r,
-        channel_height,
+        channel_top - channel_bottom,
         App.Vector(centre.x, centre.y, channel_bottom),
         App.Vector(0, 0, 1),
     )
 
-    # -- Build the tool list depending on style --
+    # Build the tool list depending on style
     tools = [channel]
 
     if style == INJECTION_FRICTION:
@@ -218,12 +179,25 @@ def add_injection_port(
         )
         tools.append(chamfer)
 
-    # Cut all geometry into upper pieces only
+    # Cut all geometry into the upper pieces only. Pieces the tools do not
+    # reach (for example the far half of a three piece layout) are left
+    # untouched.
     cut_any = False
-    for piece in pieces:
-        if piece.side != "above":
+    reach = _tools_bound_box(tools)
+    for piece in uppers:
+        if not piece.shape.BoundBox.intersect(reach):
             continue
+        volume_before = piece.shape.Volume
         for tool in tools:
             piece.cut(tool)
-        cut_any = True
+        if piece.shape.Volume < volume_before - 1e-9:
+            cut_any = True
     return centre if cut_any else None
+
+
+def _tools_bound_box(tools):
+    """Combined bounding box of every cutting tool."""
+    box = App.BoundBox()
+    for tool in tools:
+        box.add(tool.BoundBox)
+    return box
