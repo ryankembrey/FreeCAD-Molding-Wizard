@@ -40,6 +40,7 @@ from ..core.models import (
     VENT_SHAPES,
 )
 from . import pick
+from .pill_edit import PillEdit
 from .qt import QtCore, QtGui, QtWidgets
 
 ICONS = os.path.join(
@@ -51,6 +52,27 @@ ICONS = os.path.join(
 PICK_BUTTON_STYLE = """
 QPushButton:checked { border: 2px solid palette(highlight); font-weight: bold; }
 """
+
+# Multi-pick features: mode -> (positions attr, labels attr, pill field attr,
+# clear button attr).  Positions and labels are parallel lists.
+_PICK_ATTRS = {
+    "vents": ("_custom_vent_positions", "_custom_vent_labels", "pe_vent_pos", "pb_vent_clear"),
+    "keys": ("_custom_key_positions", "_custom_key_labels", "pe_key_pos", "pb_key_clear"),
+    "bolts": ("_custom_bolt_positions", "_custom_bolt_labels", "pe_bolt_pos", "pb_bolt_clear"),
+}
+
+
+def _coord_label(pt):
+    """Fallback pill text for a pick that has no element name."""
+    return "%.1f, %.1f, %.1f" % (pt.x, pt.y, pt.z)
+
+
+def _fit_labels(labels, positions):
+    """Make *labels* line up with *positions*, naming any gaps by coordinate."""
+    labels = [str(l) for l in labels][: len(positions)]
+    for pt in positions[len(labels):]:
+        labels.append(_coord_label(pt))
+    return labels
 
 
 # =============================================================================
@@ -65,6 +87,32 @@ class _EscapeFilter(QtCore.QObject):
     def eventFilter(self, obj, event):
         if event.type() == QtCore.QEvent.Type.KeyPress:
             if event.key() == QtCore.Qt.Key.Key_Escape and self._callback():
+                return True
+        return False
+
+
+class _PickEscapeFilter(QtCore.QObject):
+    """Application-wide Escape catcher, installed only while a pick is active.
+
+    Key presses go to whichever widget has focus, and the 3D view is not a
+    child the main window filter can see, so this one sits on the
+    application.  It also claims the ShortcutOverride that precedes the key
+    press, otherwise FreeCAD's own Escape shortcut would win.
+    """
+
+    def __init__(self, is_active, on_escape):
+        super().__init__()
+        self._is_active = is_active
+        self._on_escape = on_escape
+
+    def eventFilter(self, obj, event):
+        etype = event.type()
+        if etype in (QtCore.QEvent.Type.KeyPress, QtCore.QEvent.Type.ShortcutOverride):
+            if event.key() == QtCore.Qt.Key.Key_Escape and self._is_active():
+                if etype == QtCore.QEvent.Type.ShortcutOverride:
+                    event.accept()
+                else:
+                    self._on_escape()
                 return True
         return False
 
@@ -321,9 +369,15 @@ class MoldWizardPanel(object):
 
         # Custom picked positions
         self._custom_injection_pos = None   # App.Vector or None
+        self._custom_injection_label = ""   # element name shown for it
         self._custom_vent_positions = []    # list of App.Vector
         self._custom_key_positions = []     # list of App.Vector
         self._custom_bolt_positions = []    # list of App.Vector
+        # Element names (Vertex3, Face12 ...), parallel to the lists above.
+        self._custom_vent_labels = []
+        self._custom_key_labels = []
+        self._custom_bolt_labels = []
+        self._processing_pick = False
 
         # Preset tracking
         self._active_preset = None
@@ -343,6 +397,10 @@ class MoldWizardPanel(object):
         self._build_form()
         Gui.Selection.addObserver(self)
         self._escape_filter = _EscapeFilter(self._on_escape)
+        self._pick_escape_filter = _PickEscapeFilter(
+            lambda: self.picking_mode is not None, self._on_escape
+        )
+        self._pick_filter_installed = False
         for panel in self.form:
             panel.installEventFilter(self._escape_filter)
         # Also install on the main window so Escape works while the
@@ -882,13 +940,13 @@ class MoldWizardPanel(object):
             "there instead of the default position."
         )
         self.pb_inj_place.clicked.connect(self._on_pick_injection)
-        self.le_inj_pos = QtWidgets.QLineEdit()
-        self.le_inj_pos.setReadOnly(True)
-        self.le_inj_pos.setMinimumHeight(28)
-        self.le_inj_pos.setPlaceholderText("Auto (centre)")
+        self.pe_inj_pos = PillEdit("Auto (centre)")
+        self.pe_inj_pos.pillRemoved.connect(
+            lambda i: self._on_pick_pill_removed("injection", i)
+        )
         g.addWidget(self.pb_inj_place, 8, 0)
-        g.addWidget(self.le_inj_pos, 8, 1)
-        self.injection_widgets.extend([self.pb_inj_place, self.le_inj_pos])
+        g.addWidget(self.pe_inj_pos, 8, 1)
+        self.injection_widgets.extend([self.pb_inj_place, self.pe_inj_pos])
 
         # -- Pour sub-widgets --
         self.pour_widgets = []
@@ -1084,23 +1142,23 @@ class MoldWizardPanel(object):
             "for automatic even distribution."
         )
         self.pb_vent_place.clicked.connect(self._on_pick_vents)
-        self.le_vent_pos = QtWidgets.QLineEdit()
-        self.le_vent_pos.setReadOnly(True)
-        self.le_vent_pos.setMinimumHeight(28)
-        self.le_vent_pos.setPlaceholderText("Auto (distributed)")
+        self.pe_vent_pos = PillEdit("Auto (distributed)")
+        self.pe_vent_pos.pillRemoved.connect(
+            lambda i: self._on_pick_pill_removed("vents", i)
+        )
 
         # Clear button for custom vent positions
         self.pb_vent_clear = QtWidgets.QPushButton("Clear")
         self.pb_vent_clear.setMinimumHeight(28)
         self.pb_vent_clear.setToolTip("Reset to automatic vent placement.")
-        self.pb_vent_clear.clicked.connect(self._on_clear_vent_positions)
+        self.pb_vent_clear.clicked.connect(lambda: self._clear_picks("vents"))
         self.pb_vent_clear.hide()
 
         pick_row = QtWidgets.QHBoxLayout()
         pick_row.setContentsMargins(0, 0, 0, 0)
         pick_row.setSpacing(4)
-        pick_row.addWidget(self.le_vent_pos, 1)
-        pick_row.addWidget(self.pb_vent_clear, 0)
+        pick_row.addWidget(self.pe_vent_pos, 1)
+        pick_row.addWidget(self.pb_vent_clear, 0, QtCore.Qt.AlignmentFlag.AlignTop)
         pick_widget = QtWidgets.QWidget()
         pick_widget.setLayout(pick_row)
 
@@ -1118,12 +1176,6 @@ class MoldWizardPanel(object):
         self.sb_vent_width.setVisible(is_rect)
         self.lbl_vent_length.setVisible(is_rect)
         self.sb_vent_length.setVisible(is_rect)
-
-    def _on_clear_vent_positions(self):
-        self._custom_vent_positions = []
-        self._vent_element_names = []
-        self.le_vent_pos.clear()
-        self.pb_vent_clear.hide()
 
     # --- Registration keys ---
 
@@ -1175,22 +1227,22 @@ class MoldWizardPanel(object):
             "automatic corner placement."
         )
         self.pb_key_place.clicked.connect(self._on_pick_keys)
-        self.le_key_pos = QtWidgets.QLineEdit()
-        self.le_key_pos.setReadOnly(True)
-        self.le_key_pos.setMinimumHeight(28)
-        self.le_key_pos.setPlaceholderText("Auto (corners)")
+        self.pe_key_pos = PillEdit("Auto (corners)")
+        self.pe_key_pos.pillRemoved.connect(
+            lambda i: self._on_pick_pill_removed("keys", i)
+        )
 
         self.pb_key_clear = QtWidgets.QPushButton("Clear")
         self.pb_key_clear.setMinimumHeight(28)
         self.pb_key_clear.setToolTip("Reset to automatic key placement.")
-        self.pb_key_clear.clicked.connect(self._on_clear_key_positions)
+        self.pb_key_clear.clicked.connect(lambda: self._clear_picks("keys"))
         self.pb_key_clear.hide()
 
         key_pick_row = QtWidgets.QHBoxLayout()
         key_pick_row.setContentsMargins(0, 0, 0, 0)
         key_pick_row.setSpacing(4)
-        key_pick_row.addWidget(self.le_key_pos, 1)
-        key_pick_row.addWidget(self.pb_key_clear, 0)
+        key_pick_row.addWidget(self.pe_key_pos, 1)
+        key_pick_row.addWidget(self.pb_key_clear, 0, QtCore.Qt.AlignmentFlag.AlignTop)
         key_pick_widget = QtWidgets.QWidget()
         key_pick_widget.setLayout(key_pick_row)
 
@@ -1199,12 +1251,6 @@ class MoldWizardPanel(object):
 
         root.addWidget(box)
         self._step_widgets.append(box)
-
-    def _on_clear_key_positions(self):
-        self._custom_key_positions = []
-        self._key_element_names = []
-        self.le_key_pos.clear()
-        self.pb_key_clear.hide()
 
     # --- Hardware (bolts) ---
 
@@ -1292,22 +1338,22 @@ class MoldWizardPanel(object):
             "specific locations. Leave unset for automatic even spacing."
         )
         self.pb_bolt_place.clicked.connect(self._on_pick_bolts)
-        self.le_bolt_pos = QtWidgets.QLineEdit()
-        self.le_bolt_pos.setReadOnly(True)
-        self.le_bolt_pos.setMinimumHeight(28)
-        self.le_bolt_pos.setPlaceholderText("Auto (distributed)")
+        self.pe_bolt_pos = PillEdit("Auto (distributed)")
+        self.pe_bolt_pos.pillRemoved.connect(
+            lambda i: self._on_pick_pill_removed("bolts", i)
+        )
 
         self.pb_bolt_clear = QtWidgets.QPushButton("Clear")
         self.pb_bolt_clear.setMinimumHeight(28)
         self.pb_bolt_clear.setToolTip("Reset to automatic bolt placement.")
-        self.pb_bolt_clear.clicked.connect(self._on_clear_bolt_positions)
+        self.pb_bolt_clear.clicked.connect(lambda: self._clear_picks("bolts"))
         self.pb_bolt_clear.hide()
 
         bolt_pick_row = QtWidgets.QHBoxLayout()
         bolt_pick_row.setContentsMargins(0, 0, 0, 0)
         bolt_pick_row.setSpacing(4)
-        bolt_pick_row.addWidget(self.le_bolt_pos, 1)
-        bolt_pick_row.addWidget(self.pb_bolt_clear, 0)
+        bolt_pick_row.addWidget(self.pe_bolt_pos, 1)
+        bolt_pick_row.addWidget(self.pb_bolt_clear, 0, QtCore.Qt.AlignmentFlag.AlignTop)
         bolt_pick_widget = QtWidgets.QWidget()
         bolt_pick_widget.setLayout(bolt_pick_row)
 
@@ -1316,12 +1362,6 @@ class MoldWizardPanel(object):
 
         root.addWidget(box)
         self._step_widgets.append(box)
-
-    def _on_clear_bolt_positions(self):
-        self._custom_bolt_positions = []
-        self._bolt_element_names = []
-        self.le_bolt_pos.clear()
-        self.pb_bolt_clear.hide()
 
     # --- Pry slots ---
 
@@ -1521,32 +1561,49 @@ class MoldWizardPanel(object):
         pass
 
     def _process_pick(self):
-        if self.picking_mode == "object":
+        if not self.picking_mode or self._processing_pick:
+            return
+        self._processing_pick = True
+        try:
+            self._handle_pick(self.picking_mode)
+        finally:
+            self._processing_pick = False
+            # Consume the click: the pick has been read, so the clicked
+            # geometry must not stay highlighted in the 3D view (and a second
+            # click on the same element has to register again, not toggle it
+            # off).
+            try:
+                Gui.Selection.clearSelection()
+            except Exception:
+                pass
+
+    def _handle_pick(self, mode):
+        if mode == "object":
             obj = pick.selected_solid()
             if obj is not None:
                 self._apply_object(obj)
                 self._end_pick()
-        elif self.picking_mode == "pull":
+        elif mode == "pull":
             direction = pick.direction_from_selection()
             if direction is not None:
                 self._apply_pull(direction)
                 self._end_pick()
-        elif self.picking_mode == "injection":
-            self._apply_custom_position("injection")
-            self._end_pick()
-        elif self.picking_mode == "parting":
+        elif mode == "injection":
+            if self._apply_custom_position("injection"):
+                self._end_pick()
+        elif mode == "parting":
             self._apply_parting_from_pick()
             self._end_pick()
-        elif self.picking_mode == "vents":
-            self._apply_custom_position("vents")
-            # Don't end pick for vents; user can keep clicking multiple spots
-            # They press Escape or uncheck to finish.
-        elif self.picking_mode == "keys":
-            self._apply_custom_position("keys")
-            # Multi-click: keep picking until Escape or uncheck.
-        elif self.picking_mode == "bolts":
-            self._apply_custom_position("bolts")
-            # Multi-click: keep picking until Escape or uncheck.
+        elif mode in _PICK_ATTRS:
+            added = self._apply_custom_position(mode)
+            # Vents and bolts have a count: once that many are placed the
+            # pick is finished.  Keys have no count, so they keep picking
+            # until Escape or the button is toggled off.
+            if added and self._pick_is_full(mode):
+                self._end_pick()
+                self._show_status(
+                    "info", "All %d %s placed." % (self._pick_capacity(mode), mode)
+                )
 
     def _apply_object(self, obj):
         self.target_object = obj
@@ -1584,77 +1641,117 @@ class MoldWizardPanel(object):
         self.pb_pull.setChecked(False)
         self._run_slow_update()
 
+    @staticmethod
+    def _read_picks():
+        """Every clicked point in the current selection as (App.Vector, name).
+
+        The name is the sub-element FreeCAD reports (``Vertex3``, ``Face12``),
+        or the coordinates when there is none.
+        """
+        picks = []
+        for sel in Gui.Selection.getSelectionEx():
+            points = list(sel.PickedPoints) if sel.PickedPoints else []
+            names = list(sel.SubElementNames) if sel.SubElementNames else []
+            for i, raw in enumerate(points):
+                pt = App.Vector(raw)
+                name = names[i] if i < len(names) and names[i] else ""
+                picks.append((pt, name or _coord_label(pt)))
+        return picks
+
+    def _pick_lists(self, mode):
+        pos_attr, label_attr = _PICK_ATTRS[mode][:2]
+        return getattr(self, pos_attr), getattr(self, label_attr)
+
+    def _pick_capacity(self, mode):
+        """How many points this feature takes, or None when unlimited."""
+        if mode == "vents":
+            return self.sb_vent_count.value()
+        if mode == "bolts":
+            return self.sb_bolt_count.value()
+        return None
+
+    def _pick_is_full(self, mode):
+        capacity = self._pick_capacity(mode)
+        if capacity is None:
+            return False
+        return len(self._pick_lists(mode)[0]) >= capacity
+
     def _apply_custom_position(self, mode):
-        """Read the clicked point from the selection for injection or vent placement."""
+        """Record the clicked point(s) for a placement feature.
+
+        Returns how many points were taken.
+        """
         try:
-            sel_ex = Gui.Selection.getSelectionEx()
-            if not sel_ex:
-                return
-            for s in sel_ex:
-                if s.PickedPoints:
-                    pt = App.Vector(s.PickedPoints[0])
-                    # Gather the sub-element name(s) for display
-                    elem_names = list(s.SubElementNames) if s.SubElementNames else []
-                    elem_label = ", ".join(elem_names) if elem_names else (
-                        "%.1f, %.1f, %.1f" % (pt.x, pt.y, pt.z)
-                    )
-                    if mode == "injection":
-                        self._custom_injection_pos = pt
-                        self.le_inj_pos.setText(elem_label)
-                    elif mode == "vents":
-                        self._custom_vent_positions.append(pt)
-                        if elem_names:
-                            self._vent_element_names = getattr(
-                                self, "_vent_element_names", []
-                            )
-                            self._vent_element_names.extend(elem_names)
-                            self.le_vent_pos.setText(
-                                ", ".join(self._vent_element_names)
-                            )
-                        else:
-                            count = len(self._custom_vent_positions)
-                            self.le_vent_pos.setText(
-                                "%d point%s picked"
-                                % (count, "s" if count != 1 else "")
-                            )
-                        self.pb_vent_clear.show()
-                    elif mode == "keys":
-                        self._custom_key_positions.append(pt)
-                        if elem_names:
-                            self._key_element_names = getattr(
-                                self, "_key_element_names", []
-                            )
-                            self._key_element_names.extend(elem_names)
-                            self.le_key_pos.setText(
-                                ", ".join(self._key_element_names)
-                            )
-                        else:
-                            count = len(self._custom_key_positions)
-                            self.le_key_pos.setText(
-                                "%d point%s picked"
-                                % (count, "s" if count != 1 else "")
-                            )
-                        self.pb_key_clear.show()
-                    elif mode == "bolts":
-                        self._custom_bolt_positions.append(pt)
-                        if elem_names:
-                            self._bolt_element_names = getattr(
-                                self, "_bolt_element_names", []
-                            )
-                            self._bolt_element_names.extend(elem_names)
-                            self.le_bolt_pos.setText(
-                                ", ".join(self._bolt_element_names)
-                            )
-                        else:
-                            count = len(self._custom_bolt_positions)
-                            self.le_bolt_pos.setText(
-                                "%d point%s picked"
-                                % (count, "s" if count != 1 else "")
-                            )
-                        self.pb_bolt_clear.show()
-                    return
+            picks = self._read_picks()
         except Exception:
-            pass
+            return 0
+        if not picks:
+            return 0
+
+        if mode == "injection":
+            pt, label = picks[-1]
+            self._custom_injection_pos = pt
+            self._custom_injection_label = label
+            self._refresh_pick_widget("injection")
+            return 1
+
+        positions, labels = self._pick_lists(mode)
+        capacity = self._pick_capacity(mode)
+        added = 0
+        for pt, label in picks:
+            if capacity is not None and len(positions) >= capacity:
+                break
+            positions.append(pt)
+            labels.append(label)
+            added += 1
+        self._refresh_pick_widget(mode)
+        return added
+
+    def _refresh_pick_widget(self, mode):
+        """Redraw the pills (and Clear button) for one placement feature."""
+        if mode == "injection":
+            has_pick = self._custom_injection_pos is not None
+            self.pe_inj_pos.setLabels(
+                [self._custom_injection_label or _coord_label(self._custom_injection_pos)]
+                if has_pick else []
+            )
+            return
+        labels = self._pick_lists(mode)[1]
+        _pos, _lbl, field_attr, clear_attr = _PICK_ATTRS[mode]
+        getattr(self, field_attr).setLabels(labels)
+        getattr(self, clear_attr).setVisible(bool(labels))
+
+    def _on_pick_pill_removed(self, mode, index):
+        """The x on one pill was pressed: drop just that pick."""
+        if mode == "injection":
+            self._custom_injection_pos = None
+            self._custom_injection_label = ""
+        else:
+            positions, labels = self._pick_lists(mode)
+            if 0 <= index < len(positions):
+                del positions[index]
+                if index < len(labels):
+                    del labels[index]
+        self._refresh_pick_widget(mode)
+
+    def _clear_picks(self, mode):
+        """Drop every pick for a feature and go back to automatic placement."""
+        if mode == "injection":
+            self._custom_injection_pos = None
+            self._custom_injection_label = ""
+        else:
+            positions, labels = self._pick_lists(mode)
+            del positions[:]
+            del labels[:]
+        self._refresh_pick_widget(mode)
+
+    def _restore_picks(self, mode, positions, labels):
+        """Load saved picks (from a job) back into the panel and its pills."""
+        pos_attr, label_attr = _PICK_ATTRS[mode][:2]
+        positions = list(positions)
+        setattr(self, pos_attr, positions)
+        setattr(self, label_attr, _fit_labels(labels, positions))
+        self._refresh_pick_widget(mode)
 
     def _apply_parting_from_pick(self):
         """Set the parting offset from the picked vertex, edge, or face.
@@ -1750,22 +1847,27 @@ class MoldWizardPanel(object):
             self._end_pick()
 
     def _on_pick_vents(self):
-        if self.pb_vent_place.isChecked():
-            self._start_pick("vents")
-        else:
-            self._end_pick()
+        self._toggle_multi_pick("vents", self.pb_vent_place)
 
     def _on_pick_keys(self):
-        if self.pb_key_place.isChecked():
-            self._start_pick("keys")
-        else:
-            self._end_pick()
+        self._toggle_multi_pick("keys", self.pb_key_place)
 
     def _on_pick_bolts(self):
-        if self.pb_bolt_place.isChecked():
-            self._start_pick("bolts")
-        else:
+        self._toggle_multi_pick("bolts", self.pb_bolt_place)
+
+    def _toggle_multi_pick(self, mode, button):
+        if not button.isChecked():
             self._end_pick()
+            return
+        if self._pick_is_full(mode):
+            button.setChecked(False)
+            self._show_status(
+                "info",
+                "All %d %s are already placed. Remove one, or raise the "
+                "count, to pick more." % (self._pick_capacity(mode), mode),
+            )
+            return
+        self._start_pick(mode)
 
     def _on_pick_parting(self):
         if self.pb_parting_pick.isChecked():
@@ -1793,6 +1895,20 @@ class MoldWizardPanel(object):
                 QtCore.Qt.CursorShape.CrossCursor
             )
             self.cursor_overridden = True
+        # Escape has to work while the 3D view has focus, so listen on the
+        # whole application for as long as a pick is active.
+        if not self._pick_filter_installed:
+            app = QtWidgets.QApplication.instance()
+            if app is not None:
+                app.installEventFilter(self._pick_escape_filter)
+                self._pick_filter_installed = True
+
+    def _remove_pick_filter(self):
+        if self._pick_filter_installed and self.picking_mode is None:
+            app = QtWidgets.QApplication.instance()
+            if app is not None:
+                app.removeEventFilter(self._pick_escape_filter)
+            self._pick_filter_installed = False
 
     def _end_pick(self):
         self.picking_mode = None
@@ -1806,6 +1922,8 @@ class MoldWizardPanel(object):
         if self.cursor_overridden:
             QtWidgets.QApplication.restoreOverrideCursor()
             self.cursor_overridden = False
+        # Deferred: this can run from inside the filter that is being removed.
+        QtCore.QTimer.singleShot(0, self._remove_pick_filter)
 
     def _on_flip_pull(self):
         self.pull_dir = self.pull_dir * -1.0
@@ -2105,8 +2223,10 @@ class MoldWizardPanel(object):
         job.InjectionChannelLength = self.sb_inj_len.value()
         if self._custom_injection_pos is not None:
             job.InjectionPosition = self._custom_injection_pos
+            job.InjectionPickLabel = self._custom_injection_label
             job.UseCustomInjectionPos = True
         else:
+            job.InjectionPickLabel = ""
             job.UseCustomInjectionPos = False
 
         # Pour port specifics
@@ -2132,8 +2252,12 @@ class MoldWizardPanel(object):
         job.VentLength = self.sb_vent_length.value()
         if self._custom_vent_positions:
             job.VentPositions = self._custom_vent_positions
+            job.VentPickLabels = _fit_labels(
+                self._custom_vent_labels, self._custom_vent_positions
+            )
             job.UseCustomVentPositions = True
         else:
+            job.VentPickLabels = []
             job.UseCustomVentPositions = False
 
         # Registration keys
@@ -2144,8 +2268,12 @@ class MoldWizardPanel(object):
         job.KeyInset = self.sb_key_inset.value()
         if self._custom_key_positions:
             job.KeyPositions = self._custom_key_positions
+            job.KeyPickLabels = _fit_labels(
+                self._custom_key_labels, self._custom_key_positions
+            )
             job.UseCustomKeyPositions = True
         else:
+            job.KeyPickLabels = []
             job.UseCustomKeyPositions = False
 
         # Hardware (bolts)
@@ -2158,8 +2286,12 @@ class MoldWizardPanel(object):
         job.NutTrap = self.chk_nut_trap.isChecked()
         if self._custom_bolt_positions:
             job.BoltPositions = self._custom_bolt_positions
+            job.BoltPickLabels = _fit_labels(
+                self._custom_bolt_labels, self._custom_bolt_positions
+            )
             job.UseCustomBoltPositions = True
         else:
+            job.BoltPickLabels = []
             job.UseCustomBoltPositions = False
 
         # Pry slots
@@ -2247,9 +2379,10 @@ class MoldWizardPanel(object):
                 pos = App.Vector(job.InjectionPosition)
                 if pos.Length > 1e-9:
                     self._custom_injection_pos = pos
-                    self.le_inj_pos.setText(
-                        "%.1f, %.1f, %.1f" % (pos.x, pos.y, pos.z)
-                    )
+                    self._custom_injection_label = str(
+                        getattr(job, "InjectionPickLabel", "") or ""
+                    ) or _coord_label(pos)
+                    self._refresh_pick_widget("injection")
             except Exception:
                 pass
 
@@ -2280,13 +2413,11 @@ class MoldWizardPanel(object):
             self.sb_vent_length.setValue(float(job.VentLength))
         if getattr(job, "UseCustomVentPositions", False):
             try:
-                self._custom_vent_positions = [App.Vector(v) for v in job.VentPositions]
-                count = len(self._custom_vent_positions)
-                if count > 0:
-                    self.le_vent_pos.setText(
-                        "%d point%s picked" % (count, "s" if count != 1 else "")
-                    )
-                    self.pb_vent_clear.show()
+                self._restore_picks(
+                    "vents",
+                    [App.Vector(v) for v in job.VentPositions],
+                    getattr(job, "VentPickLabels", []),
+                )
             except Exception:
                 pass
 
@@ -2297,13 +2428,11 @@ class MoldWizardPanel(object):
         self.sb_key_inset.setValue(float(job.KeyInset))
         if getattr(job, "UseCustomKeyPositions", False):
             try:
-                self._custom_key_positions = [App.Vector(v) for v in job.KeyPositions]
-                count = len(self._custom_key_positions)
-                if count > 0:
-                    self.le_key_pos.setText(
-                        "%d point%s picked" % (count, "s" if count != 1 else "")
-                    )
-                    self.pb_key_clear.show()
+                self._restore_picks(
+                    "keys",
+                    [App.Vector(v) for v in job.KeyPositions],
+                    getattr(job, "KeyPickLabels", []),
+                )
             except Exception:
                 pass
 
@@ -2321,13 +2450,11 @@ class MoldWizardPanel(object):
         self.chk_nut_trap.setChecked(bool(getattr(job, "NutTrap", True)))
         if getattr(job, "UseCustomBoltPositions", False):
             try:
-                self._custom_bolt_positions = [App.Vector(v) for v in job.BoltPositions]
-                count = len(self._custom_bolt_positions)
-                if count > 0:
-                    self.le_bolt_pos.setText(
-                        "%d point%s picked" % (count, "s" if count != 1 else "")
-                    )
-                    self.pb_bolt_clear.show()
+                self._restore_picks(
+                    "bolts",
+                    [App.Vector(v) for v in job.BoltPositions],
+                    getattr(job, "BoltPickLabels", []),
+                )
             except Exception:
                 pass
 
@@ -2476,6 +2603,11 @@ class MoldWizardPanel(object):
             mw = getattr(self, "_main_window", None)
             if mw is not None:
                 mw.removeEventFilter(self._escape_filter)
+        except Exception:
+            pass
+        try:
+            self.picking_mode = None
+            self._remove_pick_filter()
         except Exception:
             pass
         self._remove_direction_indicator()

@@ -95,6 +95,7 @@ class MoldJob(object):
     _SKIP_REBUILD = frozenset({
         "AutoUpdate", "Exploded",
         "CavityVolume", "SuggestedPour", "Warnings", "Notes",
+        "InjectionPickLabel", "VentPickLabels", "KeyPickLabels", "BoltPickLabels",
         "Visibility", "Label", "Label2", "ExpressionEngine",
     })
 
@@ -353,6 +354,7 @@ def add_properties(obj):
     prop("App::PropertyDistance", "KeyInset", "Registration", "Distance from block edge to key", DEFAULTS["KeyInset"])
     prop("App::PropertyVectorList", "KeyPositions", "Registration", "Custom key placement points (global coordinates)")
     prop("App::PropertyBool", "UseCustomKeyPositions", "Registration", "Use manually picked key positions", False)
+    prop("App::PropertyStringList", "KeyPickLabels", "Registration", "Names of the picked key elements (display only)", read_only=True)
 
     # -- Injection (syringe) --
     prop("App::PropertyBool", "InjectionPort", "Injection", "Add a syringe injection port", True)
@@ -393,6 +395,7 @@ def add_properties(obj):
     prop("App::PropertyDistance", "InjectionChannelLength", "Injection", "Channel length from cavity to adapter", DEFAULTS["InjectionChannelLength"])
     prop("App::PropertyVector", "InjectionPosition", "Injection", "Custom injection port position (global coordinates)", App.Vector(0, 0, 0))
     prop("App::PropertyBool", "UseCustomInjectionPos", "Injection", "Use a manually picked injection position", False)
+    prop("App::PropertyString", "InjectionPickLabel", "Injection", "Name of the picked injection element (display only)", read_only=True)
 
     # -- Overflow gutter --
     prop("App::PropertyBool", "Gutter", "Overflow", "Cut an overflow gutter around the cavity", True)
@@ -433,6 +436,7 @@ def add_properties(obj):
     )
     prop("App::PropertyVectorList", "VentPositions", "Vents", "Custom vent placement points (global coordinates)")
     prop("App::PropertyBool", "UseCustomVentPositions", "Vents", "Use manually picked vent positions", False)
+    prop("App::PropertyStringList", "VentPickLabels", "Vents", "Names of the picked vent elements (display only)", read_only=True)
 
     # -- Pry slots --
     prop("App::PropertyBool", "PrySlots", "Opening", "Notches at the seam for a lever", True)
@@ -456,6 +460,7 @@ def add_properties(obj):
     prop("App::PropertyBool", "NutTrap", "Hardware", "Nut pocket for captive nut", True)
     prop("App::PropertyVectorList", "BoltPositions", "Hardware", "Custom bolt placement points (global coordinates)")
     prop("App::PropertyBool", "UseCustomBoltPositions", "Hardware", "Use manually picked bolt positions", False)
+    prop("App::PropertyStringList", "BoltPickLabels", "Hardware", "Names of the picked bolt elements (display only)", read_only=True)
 
     # -- Build --
     prop("App::PropertyBool", "AutoUpdate", "Build", "Rebuild whenever a parameter changes", True)
