@@ -211,6 +211,8 @@ def _feature_group_keys(job):
         str(getattr(job, "SyringeSize", "")),
         round(float(getattr(job, "InjectionDiameter", 3.0)), 9),
         round(float(getattr(job, "InjectionChannelLength", 5.0)), 9),
+        round(float(getattr(job, "InjectionLuerBore", 0.0)), 9),
+        round(float(getattr(job, "InjectionCollarBore", 0.0)), 9),
         uci,
         _vt(App.Vector(job.InjectionPosition)) if uci else (),
     )
@@ -751,6 +753,8 @@ def build(job, progress_fn=None, cache=None, full_cache=None, feat_cache=None):
                 float(getattr(job, "InjectionChannelLength", 5.0)),
                 custom_inj,
                 inj_style,
+                float(getattr(job, "InjectionLuerBore", 0.0)),
+                float(getattr(job, "InjectionCollarBore", 0.0)),
             )
             if inj_centre is not None:
                 result.feature_points.append({

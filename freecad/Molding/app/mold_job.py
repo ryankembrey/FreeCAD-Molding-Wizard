@@ -373,6 +373,22 @@ def add_properties(obj):
         SYRINGE_SIZE_LIST,
     )
     prop("App::PropertyDistance", "InjectionDiameter", "Injection", "Injection channel bore diameter", DEFAULTS["InjectionDiameter"])
+    prop(
+        "App::PropertyDistance",
+        "InjectionLuerBore",
+        "Injection",
+        "Luer taper bore diameter at its narrow end (the syringe tip seat). "
+        "Zero takes the size from the syringe table.",
+        DEFAULTS["InjectionLuerBore"],
+    )
+    prop(
+        "App::PropertyDistance",
+        "InjectionCollarBore",
+        "Injection",
+        "Collar counterbore diameter (Luer Lock only), finished size including "
+        "print clearance. Zero uses the syringe collar size plus clearance.",
+        DEFAULTS["InjectionCollarBore"],
+    )
     prop("App::PropertyDistance", "InjectionChannelLength", "Injection", "Channel length from cavity to adapter", DEFAULTS["InjectionChannelLength"])
     prop("App::PropertyVector", "InjectionPosition", "Injection", "Custom injection port position (global coordinates)", App.Vector(0, 0, 0))
     prop("App::PropertyBool", "UseCustomInjectionPos", "Injection", "Use a manually picked injection position", False)

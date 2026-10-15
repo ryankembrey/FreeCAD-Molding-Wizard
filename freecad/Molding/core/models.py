@@ -93,6 +93,9 @@ DEFAULTS = {
     "GutterGap": 0.6,
     "InjectionDiameter": 3.0,
     "InjectionChannelLength": 5.0,
+    # Zero means "automatic": take the size from the syringe table above.
+    "InjectionLuerBore": 0.0,
+    "InjectionCollarBore": 0.0,
     "VentDiameter": 1.5,
     "VentWidth": 2.0,
     "VentLength": 4.0,

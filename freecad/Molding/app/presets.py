@@ -97,6 +97,8 @@ def collect_from_widgets(panel):
     data["SyringeSize"] = panel.cb_syringe.currentText()
     data["InjectionStyle"] = panel.cb_inj_style.currentText()
     data["InjectionDiameter"] = panel.sb_inj_dia.value()
+    data["InjectionLuerBore"] = panel.sb_inj_luer.value()
+    data["InjectionCollarBore"] = panel.sb_inj_collar.value()
     data["InjectionChannelLength"] = panel.sb_inj_len.value()
     data["PourDiameter"] = panel.sb_pour_dia.value()
     data["FunnelDiameter"] = panel.sb_funnel_dia.value()
@@ -200,6 +202,10 @@ def apply_to_widgets(panel, data):
         panel.cb_inj_style.setCurrentText(_str("InjectionStyle"))
     if "InjectionDiameter" in data:
         panel.sb_inj_dia.setValue(_float("InjectionDiameter"))
+    if "InjectionLuerBore" in data:
+        panel.sb_inj_luer.setValue(_float("InjectionLuerBore"))
+    if "InjectionCollarBore" in data:
+        panel.sb_inj_collar.setValue(_float("InjectionCollarBore"))
     if "InjectionChannelLength" in data:
         panel.sb_inj_len.setValue(_float("InjectionChannelLength"))
     if "PourDiameter" in data:

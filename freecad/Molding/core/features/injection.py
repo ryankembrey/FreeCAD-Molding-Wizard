@@ -39,6 +39,8 @@ def add_injection_port(
     channel_length=5.0,
     custom_position=None,
     style=INJECTION_LUER_LOCK,
+    luer_bore_diameter=0.0,
+    collar_bore_diameter=0.0,
 ):
     """Cut an injection channel and adapter recess into the upper piece.
 
@@ -46,6 +48,17 @@ def add_injection_port(
 
     * ``INJECTION_LUER_LOCK``: Luer taper + collar recess + entry chamfer.
     * ``INJECTION_FRICTION``: tapered hole for a slip-tip syringe.
+
+    Three bores can be sized independently:
+
+    * *channel_diameter*: the through channel that runs down into the cavity.
+    * *luer_bore_diameter*: the Luer taper bore, measured at its narrow end
+      (the seat the syringe tip bottoms out in). Used by both styles. ``0``
+      means "take it from the syringe size table".
+    * *collar_bore_diameter*: the cylindrical counterbore the lock collar sits
+      in. Luer Lock style only. This is the finished hole diameter, so any
+      print clearance has to be included in it. ``0`` means "syringe collar
+      diameter plus the default print clearance".
 
     When *custom_position* is an ``App.Vector`` in local frame coordinates,
     its X and Y are used as the channel centre instead of the cavity centroid.
@@ -59,7 +72,11 @@ def add_injection_port(
     if spec is None:
         spec = SYRINGE_SIZES[DEFAULT_SYRINGE]
 
-    tip_od = spec["tip_od"]
+    # A value of zero (or less) on either bore override means "automatic".
+    luer_bore_diameter = float(luer_bore_diameter or 0.0)
+    collar_bore_diameter = float(collar_bore_diameter or 0.0)
+
+    tip_od = luer_bore_diameter if luer_bore_diameter > 0.0 else spec["tip_od"]
     collar_od = spec["collar_od"]
     adapter_depth = spec["depth"]
 
@@ -121,7 +138,7 @@ def add_injection_port(
         # Friction Fit: a tapered hole matching the Luer slip taper.
         # Wider at the top (entry), narrowing to grip the syringe tip.
         taper_top_r = tip_od / 2.0 + adapter_depth * 0.06 + 0.15
-        taper_bottom_r = tip_od / 2.0 - 0.1
+        taper_bottom_r = max(tip_od / 2.0 - 0.1, 0.05)
         taper = Part.makeCone(
             taper_bottom_r,
             taper_top_r,
@@ -157,7 +174,17 @@ def add_injection_port(
         tools.append(taper)
 
         # 2. Collar recess: cylindrical counterbore for the lock collar.
-        collar_r = collar_od / 2.0 + 0.3  # clearance for print fit
+        if collar_bore_diameter > 0.0:
+            # User-specified finished diameter, used exactly as given.
+            collar_r = collar_bore_diameter / 2.0
+            if collar_r <= taper_top_r:
+                App.Console.PrintWarning(
+                    "[Molding] Collar bore (%.2f mm) is not wider than the "
+                    "Luer taper at its mouth (%.2f mm), so it will have no "
+                    "visible effect.\n" % (collar_bore_diameter, taper_top_r * 2.0)
+                )
+        else:
+            collar_r = collar_od / 2.0 + 0.3  # clearance for print fit
         collar_depth = 3.5
         collar_z = block_top - collar_depth
         collar = Part.makeCylinder(

@@ -773,14 +773,48 @@ class MoldWizardPanel(object):
         g.addWidget(self.sb_inj_dia, 4, 1)
         self.injection_widgets.extend([lbl_cd, self.sb_inj_dia])
 
+        # Luer taper bore. Zero shows as "Auto" and takes the size from the
+        # syringe table.
+        self.sb_inj_luer = self._spin(
+            value=DEFAULTS["InjectionLuerBore"], step=0.1
+        )
+        self.sb_inj_luer.setSpecialValueText("Auto")
+        self.sb_inj_luer.setToolTip(
+            "Diameter of the Luer taper bore at its narrow end, where the "
+            "syringe tip seats. Auto uses the standard size for the selected "
+            "syringe. Widen it a little if the tip is too tight after "
+            "printing."
+        )
+        lbl_lb = QtWidgets.QLabel("Luer bore diameter")
+        g.addWidget(lbl_lb, 5, 0)
+        g.addWidget(self.sb_inj_luer, 5, 1)
+        self.injection_widgets.extend([lbl_lb, self.sb_inj_luer])
+
+        # Collar counterbore (Luer Lock style only).
+        self.sb_inj_collar = self._spin(
+            value=DEFAULTS["InjectionCollarBore"], step=0.1
+        )
+        self.sb_inj_collar.setSpecialValueText("Auto")
+        self.sb_inj_collar.setToolTip(
+            "Diameter of the counterbore the lock collar sits in (Luer Lock "
+            "adapter only). This is the finished hole size, so include your "
+            "print clearance. Auto uses the syringe collar size plus 0.3 mm."
+        )
+        self.lbl_cb = QtWidgets.QLabel("Collar bore diameter")
+        g.addWidget(self.lbl_cb, 6, 0)
+        g.addWidget(self.sb_inj_collar, 6, 1)
+        self.injection_widgets.extend([self.lbl_cb, self.sb_inj_collar])
+        self.cb_inj_style.currentTextChanged.connect(self._on_inj_style_changed)
+        self._on_inj_style_changed(self.cb_inj_style.currentText())
+
         self.sb_inj_len = self._spin(value=DEFAULTS["InjectionChannelLength"], step=1.0)
         self.sb_inj_len.setToolTip(
             "Length of the channel between the cavity opening and the adapter "
             "recess. Longer channels let you trim the sprue more cleanly."
         )
         lbl_cl = QtWidgets.QLabel("Channel length")
-        g.addWidget(lbl_cl, 5, 0)
-        g.addWidget(self.sb_inj_len, 5, 1)
+        g.addWidget(lbl_cl, 7, 0)
+        g.addWidget(self.sb_inj_len, 7, 1)
         self.injection_widgets.extend([lbl_cl, self.sb_inj_len])
 
         # Custom placement button
@@ -797,8 +831,8 @@ class MoldWizardPanel(object):
         self.le_inj_pos.setReadOnly(True)
         self.le_inj_pos.setMinimumHeight(28)
         self.le_inj_pos.setPlaceholderText("Auto (centre)")
-        g.addWidget(self.pb_inj_place, 6, 0)
-        g.addWidget(self.le_inj_pos, 6, 1)
+        g.addWidget(self.pb_inj_place, 8, 0)
+        g.addWidget(self.le_inj_pos, 8, 1)
         self.injection_widgets.extend([self.pb_inj_place, self.le_inj_pos])
 
         # -- Pour sub-widgets --
@@ -807,22 +841,22 @@ class MoldWizardPanel(object):
         self.sb_pour_dia = self._spin(value=8.0, step=0.5)
         self.sb_pour_dia.setToolTip("Bore diameter of the pour hole.")
         lbl_pd = QtWidgets.QLabel("Pour diameter")
-        g.addWidget(lbl_pd, 7, 0)
-        g.addWidget(self.sb_pour_dia, 7, 1)
+        g.addWidget(lbl_pd, 9, 0)
+        g.addWidget(self.sb_pour_dia, 9, 1)
         self.pour_widgets.extend([lbl_pd, self.sb_pour_dia])
 
         self.sb_funnel_dia = self._spin(value=18.0, step=1.0)
         self.sb_funnel_dia.setToolTip("Mouth diameter of the funnel cone at the top of the block.")
         lbl_fd = QtWidgets.QLabel("Funnel diameter")
-        g.addWidget(lbl_fd, 8, 0)
-        g.addWidget(self.sb_funnel_dia, 8, 1)
+        g.addWidget(lbl_fd, 10, 0)
+        g.addWidget(self.sb_funnel_dia, 10, 1)
         self.pour_widgets.extend([lbl_fd, self.sb_funnel_dia])
 
         self.sb_funnel_depth = self._spin(value=6.0, step=0.5)
         self.sb_funnel_depth.setToolTip("Depth of the funnel cone from the block top surface.")
         lbl_fdp = QtWidgets.QLabel("Funnel depth")
-        g.addWidget(lbl_fdp, 9, 0)
-        g.addWidget(self.sb_funnel_depth, 9, 1)
+        g.addWidget(lbl_fdp, 11, 0)
+        g.addWidget(self.sb_funnel_depth, 11, 1)
         self.pour_widgets.extend([lbl_fdp, self.sb_funnel_depth])
 
         # Hide pour widgets by default (syringe is selected)
@@ -842,6 +876,12 @@ class MoldWizardPanel(object):
             w.setVisible(is_syringe)
         for w in self.pour_widgets:
             w.setVisible(is_pour)
+
+    def _on_inj_style_changed(self, text):
+        # The collar counterbore only exists on the Luer Lock adapter.
+        is_lock = text == INJECTION_LUER_LOCK
+        self.sb_inj_collar.setEnabled(is_lock)
+        self.lbl_cb.setEnabled(is_lock)
 
     # --- Overflow gutter ---
 
@@ -2005,6 +2045,8 @@ class MoldWizardPanel(object):
         job.SyringeSize = self.cb_syringe.currentText()
         job.InjectionStyle = self.cb_inj_style.currentText()
         job.InjectionDiameter = self.sb_inj_dia.value()
+        job.InjectionLuerBore = self.sb_inj_luer.value()
+        job.InjectionCollarBore = self.sb_inj_collar.value()
         job.InjectionChannelLength = self.sb_inj_len.value()
         if self._custom_injection_pos is not None:
             job.InjectionPosition = self._custom_injection_pos
@@ -2135,6 +2177,12 @@ class MoldWizardPanel(object):
             self.cb_inj_style.setCurrentText(job.InjectionStyle)
         self.sb_inj_dia.setValue(
             float(getattr(job, "InjectionDiameter", DEFAULTS["InjectionDiameter"]))
+        )
+        self.sb_inj_luer.setValue(
+            float(getattr(job, "InjectionLuerBore", DEFAULTS["InjectionLuerBore"]))
+        )
+        self.sb_inj_collar.setValue(
+            float(getattr(job, "InjectionCollarBore", DEFAULTS["InjectionCollarBore"]))
         )
         self.sb_inj_len.setValue(
             float(getattr(job, "InjectionChannelLength", DEFAULTS["InjectionChannelLength"]))
