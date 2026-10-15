@@ -15,8 +15,7 @@ class Piece(object):
     """One printed piece of the mould.
 
     ``side`` records which way the piece has to travel to come off the part,
-    which is what the exporter uses to lay it parting face down, and what the
-    key placement uses to decide male or female.
+    which is what the key placement uses to decide male or female.
     """
 
     def __init__(self, key, label, shape, side, split_normal=None):

@@ -11,6 +11,7 @@ layout and so on once, save it, and apply it to any future part.
 """
 
 import json
+import math
 import os
 
 # Version tag so we can migrate old presets if the schema changes.
@@ -70,6 +71,36 @@ def delete_preset(name):
         os.remove(path)
     except FileNotFoundError:
         pass
+
+
+def values_differ(saved, current):
+    """True when any key stored in *saved* holds a different value in *current*.
+
+    Only keys present in the saved preset are compared.  A preset written by
+    an older version lacks newer parameters; those must not make a freshly
+    loaded preset look edited, because loading leaves them untouched.
+    """
+    for key, old in saved.items():
+        if key not in current:
+            continue
+        new = current[key]
+        if isinstance(old, bool) or isinstance(new, bool):
+            if bool(old) != bool(new):
+                return True
+        elif isinstance(old, (int, float)) and isinstance(new, (int, float)):
+            if not math.isclose(old, new, rel_tol=1e-9, abs_tol=1e-6):
+                return True
+        elif old != new:
+            return True
+    return False
+
+
+def is_modified(name, panel):
+    """True when the panel's current values no longer match preset *name*."""
+    saved = load_preset(name)
+    if saved is None:
+        return False
+    return values_differ(saved, collect_from_widgets(panel))
 
 
 def collect_from_widgets(panel):

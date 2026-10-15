@@ -89,9 +89,15 @@ _NO_PRESET_LABEL = "(No preset)"
 
 
 class _PresetDialog(QtWidgets.QDialog):
-    """Single popup for loading, saving, or deleting presets."""
+    """Single popup for loading, saving, updating, or deleting presets.
 
-    def __init__(self, preset_names, active_preset, save_fn, parent=None):
+    When the active preset no longer matches the values in the task panel,
+    its row shows an inline Update button that writes the current values
+    into that preset.
+    """
+
+    def __init__(self, preset_names, active_preset, save_fn,
+                 is_modified_fn=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Presets")
         self.setMinimumWidth(280)
@@ -99,7 +105,8 @@ class _PresetDialog(QtWidgets.QDialog):
         self.chosen_action = None  # "load" or None (save/delete handled inline)
         self.chosen_name = None
         self._active_preset = active_preset
-        self._save_fn = save_fn     # callback(name) to persist current settings
+        self._save_fn = save_fn     # callback(name, updated=False) to persist current settings
+        self._is_modified_fn = is_modified_fn   # callback(name) -> bool
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setSpacing(8)
@@ -141,32 +148,70 @@ class _PresetDialog(QtWidgets.QDialog):
             lambda _: self._update_buttons()
         )
 
-    def _populate_list(self, preset_names, active_preset):
+    def _populate_list(self, preset_names, active_preset, select=None):
+        """Rebuild the list.  *select* is the preset to highlight; it defaults
+        to the active preset, or "(No preset)" when there is none."""
+        if select is None:
+            select = active_preset
         self.preset_list.clear()
-        # "No preset" sentinel at the top
+        # "No preset" sentinel at the top (no stored name)
         self.preset_list.addItem(_NO_PRESET_LABEL)
         for name in preset_names:
-            label = "%s  %s" % (_PRESET_ACTIVE_ICON, name) if name == active_preset else name
-            self.preset_list.addItem(label)
-        # Select the active preset row, or "No preset" if none active
-        if active_preset and active_preset in preset_names:
-            row = preset_names.index(active_preset) + 1  # +1 for sentinel
+            is_active = name == active_preset
+            label = "%s  %s" % (_PRESET_ACTIVE_ICON, name) if is_active else name
+            item = QtWidgets.QListWidgetItem()
+            # The real name lives in the item data so rows can carry widgets
+            # without the name having to be parsed back out of the text.
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, name)
+            self.preset_list.addItem(item)
+            if is_active and self._is_modified(name):
+                item.setText("")
+                row = self._make_modified_row(name, label)
+                item.setSizeHint(row.sizeHint())
+                self.preset_list.setItemWidget(item, row)
+            else:
+                item.setText(label)
+        # Select the requested preset row, or "No preset" if none
+        if select and select in preset_names:
+            row = preset_names.index(select) + 1  # +1 for sentinel
             self.preset_list.setCurrentRow(row)
         else:
             self.preset_list.setCurrentRow(0)
+
+    def _is_modified(self, name):
+        if self._is_modified_fn is None:
+            return False
+        try:
+            return bool(self._is_modified_fn(name))
+        except Exception:
+            return False
+
+    def _make_modified_row(self, name, label):
+        """Row for an edited active preset: its label plus an Update button."""
+        row = QtWidgets.QWidget()
+        row_layout = QtWidgets.QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 1, 2, 1)
+        row_layout.setSpacing(4)
+        text = QtWidgets.QLabel(label)
+        # Let clicks on the label fall through to the list so the row still
+        # selects and double-click still loads.
+        text.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        btn = QtWidgets.QPushButton("Update")
+        btn.setToolTip(
+            'Overwrite preset "%s" with the values currently in the panel.' % name
+        )
+        btn.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        btn.clicked.connect(lambda _checked=False, n=name: self._on_update(n))
+        row_layout.addWidget(text, 1)
+        row_layout.addWidget(btn)
+        return row
 
     def _selected_name(self):
         """Return the real preset name from the current row, or None for sentinel."""
         item = self.preset_list.currentItem()
         if item is None:
             return None
-        text = item.text()
-        if text == _NO_PRESET_LABEL:
-            return None
-        # Strip the active icon prefix if present
-        if text.startswith(_PRESET_ACTIVE_ICON):
-            text = text[len(_PRESET_ACTIVE_ICON):].lstrip()
-        return text
+        return item.data(QtCore.Qt.ItemDataRole.UserRole)
 
     def _update_buttons(self):
         name = self._selected_name()
@@ -179,6 +224,16 @@ class _PresetDialog(QtWidgets.QDialog):
         self.chosen_action = "load"
         self.chosen_name = name
         self.accept()
+
+    def _on_update(self, name):
+        """Write the panel's current values into an existing preset."""
+        from ..app import presets
+
+        keep = self._selected_name()
+        self._save_fn(name, True)
+        self._active_preset = name
+        # Refresh in place; the Update button disappears now the preset matches.
+        self._populate_list(presets.list_presets(), name, select=keep)
 
     def _on_save(self):
         from ..app import presets
@@ -471,7 +526,7 @@ class MoldWizardPanel(object):
         self.pb_clear.clicked.connect(self._on_clear)
         self.pb_presets = QtWidgets.QPushButton("Presets")
         self.pb_presets.setToolTip(
-            "Save, load, or delete parameter presets."
+            "Save, load, update, or delete parameter presets."
         )
         self.pb_presets.clicked.connect(self._on_presets)
 
@@ -2304,14 +2359,18 @@ class MoldWizardPanel(object):
     def _on_presets(self):
         from ..app import presets
 
-        def _do_save(name):
+        def _do_save(name, updated=False):
             data = presets.collect_from_widgets(self)
             presets.save_preset(name, data)
             self._active_preset = name
-            self._show_status("success", 'Preset "%s" saved.' % name)
+            self._show_status(
+                "success",
+                'Preset "%s" %s.' % (name, "updated" if updated else "saved"),
+            )
 
         dlg = _PresetDialog(
             presets.list_presets(), self._active_preset, _do_save,
+            lambda name: presets.is_modified(name, self),
             Gui.getMainWindow(),
         )
         if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:

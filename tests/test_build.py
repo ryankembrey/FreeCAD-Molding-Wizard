@@ -155,26 +155,5 @@ class TestBuild(unittest.TestCase):
         self.assertTrue(result.warnings)
 
 
-class TestExport(unittest.TestCase):
-    def setUp(self):
-        self.document = make_document()
-        self.source = add_solid(self.document, Part.makeSphere(12.0), "Ball")
-        self.job = mold_job.create(self.document, self.source)
-        self.job.PartingOffset = 12.0
-        mold_job.rebuild(self.job)
-
-    def tearDown(self):
-        App.closeDocument(self.document.Name)
-
-    def test_pieces_land_on_the_bed(self):
-        from freecad.Molding.app import export as exportmod
-
-        for child in self.job.Group:
-            oriented = exportmod.orient_for_print(
-                child.Shape, child.PieceSide, self.job.PullDirection
-            )
-            self.assertAlmostEqual(oriented.BoundBox.ZMin, 0.0, delta=1e-6)
-
-
 if __name__ == "__main__":
     unittest.main(exit=False, verbosity=2)

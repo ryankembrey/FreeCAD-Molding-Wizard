@@ -20,8 +20,6 @@ from ..core.models import (
     DEFAULTS,
     EMBOSS_PLACEMENTS,
     EMBOSS_SIDE_WALL,
-    EXPORT_FORMATS,
-    EXPORT_STL,
     GUTTER_ABOVE,
     GUTTER_SIDES,
     INJECTION_LUER_LOCK,
@@ -96,13 +94,12 @@ class MoldJob(object):
     # Properties that do NOT require a geometry rebuild.
     _SKIP_REBUILD = frozenset({
         "AutoUpdate", "Exploded",
-        "OutputDirectory", "ExportFormat", "MeshDeviation", "OrientForPrint",
         "CavityVolume", "SuggestedPour", "Warnings", "Notes",
         "Visibility", "Label", "Label2", "ExpressionEngine",
     })
 
     def onChanged(self, obj, prop):
-        """Filter property changes so view/export/results edits skip rebuild."""
+        """Filter property changes so view/results edits skip rebuild."""
         if prop in self._SKIP_REBUILD:
             obj.purgeTouched()
             if prop == "Exploded":
@@ -275,6 +272,10 @@ def _update_explode(obj):
         else:
             return  # child list doesn't match, need a full rebuild first
     _explode(obj, children, result)
+
+
+# Properties that older versions added and that no longer exist.
+_LEGACY_PROPERTIES = ("OutputDirectory", "ExportFormat", "MeshDeviation", "OrientForPrint")
 
 
 def add_properties(obj):
@@ -482,8 +483,12 @@ def add_properties(obj):
     prop("App::PropertyFloat", "EmbossFontSize", "Embossment", "Letter height in mm", 5.0)
     prop("App::PropertyFloat", "EmbossDepth", "Embossment", "Cut depth in mm", 0.8)
 
-    # -- Export --
-    prop("App::PropertyPath", "OutputDirectory", "Export", "Where exported pieces are written")
-    prop("App::PropertyEnumeration", "ExportFormat", "Export", "File type for each piece", EXPORT_STL, EXPORT_FORMATS)
-    prop("App::PropertyFloat", "MeshDeviation", "Export", "Tessellation tolerance", DEFAULTS["MeshDeviation"])
-    prop("App::PropertyBool", "OrientForPrint", "Export", "Lay parting face down", True)
+    # -- Legacy cleanup --
+    # Files saved by older versions carry these properties; drop them so the
+    # Export group disappears from the property view.
+    for legacy in _LEGACY_PROPERTIES:
+        if legacy in obj.PropertiesList:
+            try:
+                obj.removeProperty(legacy)
+            except Exception:
+                pass

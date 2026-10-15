@@ -41,11 +41,6 @@ EMBOSS_OUTER = "Outer face"
 EMBOSS_INNER = "Inner face"
 EMBOSS_PLACEMENTS = [EMBOSS_SIDE_WALL, EMBOSS_OUTER, EMBOSS_INNER]
 
-EXPORT_STL = "STL"
-EXPORT_STEP = "STEP"
-EXPORT_BOTH = "STL and STEP"
-EXPORT_FORMATS = [EXPORT_STL, EXPORT_STEP, EXPORT_BOTH]
-
 # Metric socket head cap screw dimensions in mm.
 BOLTS = {
     "M3":  {"clearance": 3.4,  "head": 6.2,  "head_h": 3.2, "nut_af": 5.5,  "nut_h": 2.4},
@@ -103,5 +98,4 @@ DEFAULTS = {
     "PrySlotWidth": 12.0,
     "PrySlotDepth": 4.0,
     "OverpourPercent": 15.0,
-    "MeshDeviation": 0.05,
 }
